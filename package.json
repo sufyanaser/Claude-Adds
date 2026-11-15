@@ -1,0 +1,48 @@
+{
+  "name": "claude-adds",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Arabic desktop viewer for Claude plugins, skills and connectors (read-only).",
+  "author": "Sufyan Nasser",
+  "license": "UNLICENSED",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "npm run build && node tests/e2e/smoke.mjs",
+    "package": "npm run build && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.sufyanaser.claudeadds",
+    "productName": "Claude Adds",
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "Claude-Adds-${version}-portable.exe"
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "playwright-core": "^1.65.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}

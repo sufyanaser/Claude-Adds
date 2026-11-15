@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claude Adds</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <nav class="side" aria-label="التنقل الرئيسي">
+        <div class="brand">
+          <bdi class="brand-name" dir="ltr">Claude Adds</bdi>
+          <span class="brand-sub">إضافات Claude ومهاراته وموصلاته</span>
+        </div>
+        <ul class="nav" id="nav"></ul>
+        <div class="side-foot">
+          <button type="button" class="btn quiet" id="theme-toggle"></button>
+        </div>
+      </nav>
+
+      <main class="main">
+        <header class="top">
+          <label class="search">
+            <span class="visually-hidden">بحث في كل الأدوات</span>
+            <input
+              id="search"
+              type="search"
+              dir="auto"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="ابحث بالعربية أو الإنجليزية: اسم أداة، فئة، حالة"
+            />
+          </label>
+          <div class="top-actions">
+            <span class="muted" id="checked-at"></span>
+            <button type="button" class="btn" id="refresh">تحديث البيانات</button>
+          </div>
+        </header>
+
+        <div id="banner"></div>
+
+        <section class="view" id="overview" aria-label="نظرة عامة"></section>
+
+        <section class="view" id="list" aria-label="قائمة الأدوات" hidden>
+          <div class="list-head">
+            <h1 id="list-title"></h1>
+            <span class="muted" id="result-count" role="status" aria-live="polite"></span>
+          </div>
+          <div class="filters" role="group" aria-label="المرشحات">
+            <label>الحالة <select id="f-status"></select></label>
+            <label>الفئة <select id="f-category"></select></label>
+            <label>المصدر <select id="f-source"></select></label>
+            <label>النطاق <select id="f-scope"></select></label>
+            <button type="button" class="btn quiet" id="clear-filters">مسح المرشحات</button>
+          </div>
+          <div class="table-wrap" id="table-wrap"></div>
+        </section>
+      </main>
+
+      <aside class="details" id="details" aria-label="تفاصيل الأداة" hidden></aside>
+    </div>
+    <dialog class="dialog" id="confirm" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">تأكيد التثبيت المباشر</h2>
+      <div class="dialog-body" id="confirm-body"></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn primary" id="confirm-yes">تثبيت الآن</button>
+        <button type="button" class="btn" id="confirm-no">إلغاء</button>
+      </div>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
