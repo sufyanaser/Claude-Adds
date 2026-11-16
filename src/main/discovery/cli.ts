@@ -14,6 +14,7 @@ export interface CliRun {
   stdout: string;
   stderr: string;
   error?: string;
+  timedOut?: boolean;
 }
 
 function run(file: string, args: string[], cwd: string, timeoutMs: number, shell: boolean): Promise<CliRun> {
@@ -25,7 +26,7 @@ function run(file: string, args: string[], cwd: string, timeoutMs: number, shell
       (error, stdout, stderr) => {
         if (!error) return resolve({ ok: true, stdout, stderr });
         const timedOut = (error as NodeJS.ErrnoException & { killed?: boolean }).killed === true;
-        resolve({ ok: false, stdout, stderr, error: timedOut ? 'انتهت مهلة الأمر' : `رمز الخروج ${String(error.code ?? '?')}` });
+        resolve({ ok: false, stdout, stderr, timedOut, error: timedOut ? 'انتهت مهلة الأمر' : `رمز الخروج ${String(error.code ?? '?')}` });
       },
     );
   });

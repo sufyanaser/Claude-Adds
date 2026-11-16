@@ -88,6 +88,63 @@ export interface Tool {
   version?: string;
   location?: string;
   install?: CatalogInstall;
+  /** Names and descriptions of a plugin's commands, so search finds the plugin by them. */
+  keywords?: string;
+  /** Content hash of a skill file or endpoint of a connector. Equal values prove the same tool. */
+  fingerprint?: string;
+  /** Other places where the identical tool was found and merged into this record. */
+  copies?: Array<{ source: string; location: string }>;
+}
+
+/** Why a source or tool is not healthy, as far as the evidence shows. */
+export type IssueCode =
+  | 'none'
+  | 'cli-missing'
+  | 'cli-not-in-path'
+  | 'command-failed'
+  | 'timeout'
+  | 'auth'
+  | 'plugin-disabled'
+  | 'skill-scope'
+  | 'catalog'
+  | 'no-source';
+
+export type FixId = 'path' | 'retry' | 'login' | 'enable' | 'copy-skill';
+
+export interface Diagnosis {
+  title: string;
+  issue: IssueCode;
+  /** The proven cause, in one sentence. */
+  cause: string;
+  evidence: string[];
+  fix?: {
+    id: FixId;
+    label: string;
+    /** What will happen and where, shown before a fix that changes something. */
+    detail: string;
+    needsConfirm: boolean;
+  };
+  officialUrl?: string;
+}
+
+export interface FixResult {
+  ok: boolean;
+  message: string;
+  evidence: string[];
+}
+
+export type DiagnoseTarget = { kind: 'source' | 'tool'; id: string };
+
+export type JobStage = 'check' | 'install' | 'auth' | 'enable' | 'verify';
+
+export interface JobProgress {
+  planId: string;
+  itemId: string;
+  env: EnvId;
+  stage: JobStage;
+  /** 1-based position of the stage among the stages that apply to this destination. */
+  index: number;
+  total: number;
 }
 
 export interface AccountInfo {
@@ -116,6 +173,7 @@ export interface SourceHealth {
   /** Date of the data being shown when it is older than this check. */
   dataDate?: string;
   setupUrl?: string;
+  issue?: IssueCode;
 }
 
 export type CapabilityState = 'verified' | 'needs-completion' | 'unverified';
@@ -225,6 +283,8 @@ export interface BackupResult {
 
 export interface ClaudeAddsApi {
   load(): Promise<Snapshot>;
+  /** The inventory the main process already holds, without taking a new one. */
+  last(): Promise<Snapshot | null>;
   copy(text: string): Promise<boolean>;
   open(url: string): Promise<boolean>;
   chooseProject(): Promise<string | null>;
@@ -235,6 +295,16 @@ export interface ClaudeAddsApi {
   planFromGit(url: string): Promise<PlanResponse>;
   planFromTool(toolId: string): Promise<PlanResponse>;
   runPlan(planId: string, picks: PlanPick[]): Promise<PlanResult[]>;
+  /** Stage changes of installs running in the background. */
+  onProgress(listener: (progress: JobProgress) => void): void;
+  diagnose(target: DiagnoseTarget): Promise<Diagnosis>;
+  applyFix(target: DiagnoseTarget, fix: FixId): Promise<FixResult>;
+  /** Takes a fresh inventory and reports what it proves about one tool. */
+  verifyTool(toolId: string): Promise<FixResult>;
+  /** Starts the connector's own sign-in in the background, or opens its official page. */
+  authConnector(toolId: string): Promise<FixResult>;
+  /** The inventory changed outside a refresh the window asked for (a background sign-in finished). */
+  onInventoryChanged(listener: () => void): void;
   updateState(): Promise<UpdateState>;
   updatePrefs(prefs: { channel?: 'stable' | 'dev'; auto?: boolean }): Promise<UpdateState>;
   updateCheck(): Promise<UpdateState>;

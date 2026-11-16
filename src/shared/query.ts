@@ -1,11 +1,14 @@
-import { KIND_LABEL, SCOPE_LABEL, STATUS_LABEL, STATUS_ORDER, categoryLabel, envLabel, sourceLabel } from './labels';
-import type { EnvId, Tool, ToolKind, ToolScope, ToolStatus } from './types';
+import { KIND_LABEL, SCOPE_LABEL, STATUS_LABEL, STATUS_ORDER, TAB_KINDS, TAB_LABEL, categoryLabel, envLabel, sourceLabel } from './labels';
+import type { EnvId, Tool, ToolScope, ToolStatus } from './types';
+
+/** The three fixed tabs. Commands live inside their plugin and are found through it. */
+export type TabKind = 'plugin' | 'skill' | 'connector';
 
 export interface Filters {
   /** 'mine' lists what exists here; 'catalog' lists what can be added. */
   view: 'mine' | 'catalog';
   env: EnvId | 'all';
-  kind: ToolKind | 'all';
+  kind: TabKind;
   status: ToolStatus | 'all';
   category: string;
   source: string;
@@ -23,7 +26,7 @@ export interface Sort {
 export const EMPTY_FILTERS: Filters = {
   view: 'mine',
   env: 'all',
-  kind: 'all',
+  kind: 'plugin',
   status: 'all',
   category: 'all',
   source: 'all',
@@ -49,6 +52,7 @@ export function normalize(text: string): string {
 
 const haystacks = new WeakMap<Tool, string>();
 
+/** Everything a tool can be found by: name, identifier, function, labels, and its commands. */
 export function haystack(tool: Tool): string {
   let value = haystacks.get(tool);
   if (value === undefined) {
@@ -56,10 +60,13 @@ export function haystack(tool: Tool): string {
       [
         tool.name,
         tool.title,
+        tool.id,
         tool.description,
         tool.ar.summary,
         tool.ar.when,
+        tool.keywords ?? '',
         KIND_LABEL[tool.kind],
+        tool.kind === 'command' ? '' : TAB_LABEL[tool.kind],
         categoryLabel(tool.category),
         tool.category,
         STATUS_LABEL[tool.status],
@@ -91,10 +98,12 @@ export function statusIn(tool: Tool, env: EnvId | 'all'): ToolStatus {
   ).status;
 }
 
+const inEnv = (tool: Tool, env: EnvId | 'all') => env === 'all' || tool.envs.some((placement) => placement.env === env);
+
 function matchesFacets(tool: Tool, filters: Filters): boolean {
   return (
-    (filters.env === 'all' || tool.envs.some((placement) => placement.env === filters.env)) &&
-    (filters.kind === 'all' || tool.kind === filters.kind) &&
+    tool.kind === filters.kind &&
+    inEnv(tool, filters.env) &&
     (filters.status === 'all' || statusIn(tool, filters.env) === filters.status) &&
     (filters.category === 'all' || tool.category === filters.category) &&
     (filters.source === 'all' || tool.source === filters.source) &&
@@ -110,13 +119,45 @@ export function applyFilters(tools: Tool[], filters: Filters): Tool[] {
 
 /**
  * Search results for the home screen: what the user already has first, then
- * matching catalog entries. Without a query the catalog stays out of the way.
+ * matching catalog entries of the same tab. Without a query the catalog stays out of the way.
  */
 export function searchGroups(tools: Tool[], filters: Filters): { mine: Tool[]; catalog: Tool[] } {
   if (filters.view === 'catalog') return { mine: [], catalog: applyFilters(tools, filters) };
   const mine = applyFilters(tools, filters);
   const catalog = filters.query.trim() ? applyFilters(tools, { ...filters, view: 'catalog', status: 'all', scope: 'all', source: 'all' }) : [];
   return { mine, catalog };
+}
+
+export interface TabCount {
+  kind: TabKind;
+  /** Tools of this tab in the chosen view and platform, before search and filters. */
+  total: number;
+  /** Tools left after search and filters. */
+  shown: number;
+}
+
+/** Counts for the three tabs. `total` and `shown` differ only when a search or filter is active. */
+export function tabCounts(tools: Tool[], filters: Filters): TabCount[] {
+  const mine = filters.view === 'mine';
+  return TAB_KINDS.map((kind) => {
+    const pool = tools.filter((tool) => tool.mine === mine && tool.kind === kind && inEnv(tool, filters.env));
+    const same = kind === filters.kind;
+    // Filters other than the search belong to the open tab only.
+    const narrowed: Filters = same ? { ...filters, kind } : { ...EMPTY_FILTERS, view: filters.view, env: filters.env, query: filters.query, kind };
+    return { kind, total: pool.length, shown: pool.filter((tool) => matchesFacets(tool, narrowed)).length };
+  });
+}
+
+/** Status counts of the open tab in the chosen platform, in display order. */
+export function statusCounts(tools: Tool[], filters: Filters): Array<{ status: ToolStatus; count: number }> {
+  const mine = filters.view === 'mine';
+  const counts = new Map<ToolStatus, number>();
+  for (const tool of tools) {
+    if (tool.mine !== mine || tool.kind !== filters.kind || !inEnv(tool, filters.env)) continue;
+    const status = statusIn(tool, filters.env);
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  return STATUS_ORDER.filter((status) => counts.has(status)).map((status) => ({ status, count: counts.get(status) ?? 0 }));
 }
 
 function sortValue(tool: Tool, key: SortKey, env: EnvId | 'all'): string {
@@ -138,25 +179,5 @@ export function sortTools(tools: Tool[], sort: Sort, env: EnvId | 'all' = 'all')
     const primary = sortValue(a, sort.key, env).localeCompare(sortValue(b, sort.key, env), 'ar');
     if (primary !== 0) return primary * factor;
     return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
-  });
-}
-
-/** Counts per kind and status for the tools given, in display order. */
-export function summarize(tools: Tool[], env: EnvId | 'all'): Array<{ kind: ToolKind; total: number; statuses: Array<{ status: ToolStatus; count: number }> }> {
-  const kinds: ToolKind[] = ['plugin', 'skill', 'command', 'connector'];
-  return kinds.map((kind) => {
-    const counts = new Map<ToolStatus, number>();
-    let total = 0;
-    for (const tool of tools) {
-      if (tool.kind !== kind) continue;
-      const status = statusIn(tool, env);
-      counts.set(status, (counts.get(status) ?? 0) + 1);
-      total++;
-    }
-    return {
-      kind,
-      total,
-      statuses: STATUS_ORDER.filter((status) => counts.has(status)).map((status) => ({ status, count: counts.get(status) ?? 0 })),
-    };
   });
 }

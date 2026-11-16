@@ -16,12 +16,13 @@
         </div>
         <ul class="nav" id="nav"></ul>
         <div class="side-foot">
+          <div class="app-version" id="app-version"></div>
           <button type="button" class="btn quiet" id="theme-toggle"></button>
         </div>
       </nav>
 
       <main class="main">
-        <div class="envbar" id="envbar" role="group" aria-label="وصول سريع حسب البيئة"></div>
+        <div class="envbar" id="envbar" role="group" aria-label="المنصة"></div>
 
         <header class="top">
           <label class="search">
@@ -49,13 +50,13 @@
             <h1 id="list-title"></h1>
             <span class="muted" id="result-count" role="status" aria-live="polite"></span>
           </div>
+          <div class="tabs" id="tabs" role="tablist" aria-label="نوع الأداة"></div>
           <div class="summary" id="summary"></div>
           <div class="filters" role="group" aria-label="المرشحات">
-            <label>النوع <select id="f-kind"></select></label>
-            <label>الحالة <select id="f-status"></select></label>
-            <label>الفئة <select id="f-category"></select></label>
-            <label>المصدر <select id="f-source"></select></label>
-            <label>النطاق <select id="f-scope"></select></label>
+            <div class="field-dd"><span class="field-label">الحالة</span><span id="f-status"></span></div>
+            <div class="field-dd"><span class="field-label">الفئة</span><span id="f-category"></span></div>
+            <div class="field-dd"><span class="field-label">المصدر</span><span id="f-source"></span></div>
+            <div class="field-dd"><span class="field-label">النطاق</span><span id="f-scope"></span></div>
             <button type="button" class="btn quiet" id="clear-filters">مسح المرشحات</button>
           </div>
           <div class="table-wrap" id="table-wrap"></div>
@@ -65,13 +66,25 @@
       </main>
 
       <aside class="details" id="details" aria-label="تفاصيل الأداة" hidden></aside>
+      <button type="button" class="panel-toggle" id="panel-toggle"></button>
     </div>
+
+    <dialog class="dialog tool-modal" id="tool-modal" aria-label="تفاصيل الأداة">
+      <div class="tool-modal-body" id="tool-modal-body"></div>
+    </dialog>
 
     <dialog class="dialog" id="plan" aria-labelledby="plan-title">
       <h2 id="plan-title">خطة التثبيت</h2>
       <div class="dialog-body" id="plan-body"></div>
       <div class="dialog-actions" id="plan-actions"></div>
     </dialog>
+
+    <dialog class="dialog" id="diag" aria-labelledby="diag-title">
+      <h2 id="diag-title">تشخيص وإصلاح</h2>
+      <div class="dialog-body" id="diag-body"></div>
+      <div class="dialog-actions" id="diag-actions"></div>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="app.js"></script>
   </body>

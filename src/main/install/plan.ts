@@ -2,7 +2,7 @@ import { existsSync, lstatSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
 import { ENVS, envLabel } from '../../shared/labels';
-import type { EnvId, InstallPlan, PlanDestination, PlanItem, PlanPick, PlanResult, Tool } from '../../shared/types';
+import type { EnvId, InstallPlan, JobProgress, JobStage, PlanDestination, PlanItem, PlanPick, PlanResult, Tool } from '../../shared/types';
 import { detectCli, runCli, runGit } from '../discovery/cli';
 import { parseFrontmatter, readServerDefs } from '../discovery/contents';
 import { claudePaths } from '../discovery/discover';
@@ -300,11 +300,16 @@ export async function planFromTool(tool: Tool | undefined, ctx: PlanContext): Pr
 
 // ---------- Execution ----------
 
-async function copySkill(exec: Extract<Exec, { type: 'copy-skill' }>): Promise<{ ok: boolean; verified: boolean; message: string }> {
+type Step = (stage: JobStage, index: number, total: number) => void;
+
+async function copySkill(exec: Extract<Exec, { type: 'copy-skill' }>, step: Step): Promise<{ ok: boolean; verified: boolean; message: string }> {
+  step('check', 1, 3);
   if (existsSync(exec.to)) return { ok: false, verified: false, message: 'مجلد بالاسم نفسه موجود في الوجهة، ولم يُستبدل.' };
+  step('install', 2, 3);
   await mkdir(dirname(exec.to), { recursive: true });
   // Symbolic links are skipped so a repository cannot point outside itself.
   await cp(exec.from, exec.to, { recursive: true, errorOnExist: true, force: false, filter: (source) => !lstatSync(source).isSymbolicLink() && basename(source) !== '.git' });
+  step('verify', 3, 3);
   let verified: boolean;
   try {
     verified = Boolean(parseFrontmatter(await readFile(join(exec.to, 'SKILL.md'), 'utf8')).name);
@@ -314,27 +319,43 @@ async function copySkill(exec: Extract<Exec, { type: 'copy-skill' }>): Promise<{
   return { ok: true, verified, message: verified ? `نُسخت المهارة إلى ${exec.to} وتأكد وجود ملفها.` : `نُسخ المجلد إلى ${exec.to} لكن تعذّر التحقق من ملف المهارة.` };
 }
 
-async function installClaudePlugin(exec: Extract<Exec, { type: 'claude-plugin' }>, ctx: PlanContext): Promise<{ ok: boolean; verified: boolean; message: string }> {
+async function installClaudePlugin(exec: Extract<Exec, { type: 'claude-plugin' }>, ctx: PlanContext, step: Step): Promise<{ ok: boolean; verified: boolean; message: string }> {
+  step('check', 1, 4);
   const cli = await detectCli(ctx.homeDir, ctx.env);
   if (!cli.available) return { ok: false, verified: false, message: cli.reason ?? 'Claude CLI غير متاح.' };
+  step('install', 2, 4);
   // `-y` is never passed: a plugin that needs a marketplace command confirmed is refused and reported.
   const run = await runCli(cli, exec.args, ctx.homeDir, 300000);
   if (!run.ok) {
     const output = redactCommand((run.stderr || run.stdout).trim().split(/\r?\n/).slice(-4).join(' ')).slice(0, 400);
     return { ok: false, verified: false, message: `رفض Claude CLI التثبيت (${run.error ?? ''}). ${output}` };
   }
-  const list = await runCli(cli, ['plugin', 'list', '--json'], ctx.homeDir, 45000);
-  let verified: boolean;
-  try {
-    verified = list.ok && parsePluginList(list.stdout).some((plugin) => plugin.name === exec.name);
-  } catch {
-    verified = false;
+  const listed = async () => {
+    const list = await runCli(cli, ['plugin', 'list', '--json'], ctx.homeDir, 45000);
+    try {
+      return list.ok ? parsePluginList(list.stdout).find((plugin) => plugin.name === exec.name) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  step('enable', 3, 4);
+  let plugin = await listed();
+  // Installed but switched off: turn it on, since the user asked for a working install.
+  if (plugin && plugin.enabled === false && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(plugin.id)) {
+    await runCli(cli, ['plugin', 'enable', plugin.id], ctx.homeDir, 120000);
+    plugin = await listed();
   }
-  return { ok: true, verified, message: verified ? `ثُبّتت ${exec.name} وظهرت في claude plugin list.` : `انتهى أمر التثبيت لكن ${exec.name} لم تظهر في claude plugin list.` };
+  step('verify', 4, 4);
+  const verified = plugin?.enabled === true;
+  return {
+    ok: true,
+    verified,
+    message: verified ? `ثُبّتت ${exec.name} وهي مفعّلة حسب claude plugin list.` : plugin ? `ثُبّتت ${exec.name} لكنها ليست مفعّلة حسب claude plugin list.` : `انتهى أمر التثبيت لكن ${exec.name} لم تظهر في claude plugin list.`,
+  };
 }
 
 /** Runs each chosen destination on its own, so one failure never hides another's result. */
-export async function runPlan(planId: string, picks: PlanPick[], ctx: PlanContext): Promise<PlanResult[]> {
+export async function runPlan(planId: string, picks: PlanPick[], ctx: PlanContext, onProgress: (progress: JobProgress) => void = () => {}): Promise<PlanResult[]> {
   const stored = plans.get(planId);
   const results: PlanResult[] = [];
   for (const pick of picks) {
@@ -344,7 +365,8 @@ export async function runPlan(planId: string, picks: PlanPick[], ctx: PlanContex
       continue;
     }
     try {
-      const outcome = exec.type === 'copy-skill' ? await copySkill(exec) : await installClaudePlugin(exec, ctx);
+      const step: Step = (stage, index, total) => onProgress({ planId, itemId: pick.itemId, env: pick.env, stage, index, total });
+      const outcome = exec.type === 'copy-skill' ? await copySkill(exec, step) : await installClaudePlugin(exec, ctx, step);
       results.push({ ...pick, ...outcome });
       if (outcome.ok) {
         // Installed: a retry of this destination must not run again.

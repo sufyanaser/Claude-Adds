@@ -1,4 +1,4 @@
-import type { CapabilityState, CommandKind, DestinationState, EnvId, PlanItemKind, ToolKind, ToolScope, ToolStatus } from './types';
+import type { CapabilityState, CommandKind, DestinationState, EnvId, IssueCode, JobStage, PlanItemKind, ToolKind, ToolScope, ToolStatus } from './types';
 
 export const KIND_LABEL: Record<ToolKind, string> = {
   plugin: 'إضافة',
@@ -15,6 +15,36 @@ export const KIND_PLURAL: Record<ToolKind, string> = {
 };
 
 export const KINDS: ToolKind[] = ['plugin', 'skill', 'command', 'connector'];
+
+/** The three fixed tabs of "my tools" and the catalog. */
+export const TAB_KINDS = ['plugin', 'skill', 'connector'] as const;
+
+export const TAB_LABEL: Record<(typeof TAB_KINDS)[number], string> = {
+  plugin: 'Plugins',
+  skill: 'Skills',
+  connector: 'MCP',
+};
+
+export const ISSUE_LABEL: Record<IssueCode, string> = {
+  none: 'لا مشكلة مثبتة',
+  'cli-missing': 'الأداة غير مثبّتة',
+  'cli-not-in-path': 'الأداة خارج PATH',
+  'command-failed': 'فشل أمر الجرد',
+  timeout: 'انتهت مهلة الأمر',
+  auth: 'يتطلب تسجيل الدخول',
+  'plugin-disabled': 'الإضافة معطّلة',
+  'skill-scope': 'مجلد المهارة غير موثّق',
+  catalog: 'تعذّر تحديث الكتالوج',
+  'no-source': 'لا يوجد مصدر جرد مدعوم',
+};
+
+export const STAGE_LABEL: Record<JobStage, string> = {
+  check: 'التحقق',
+  install: 'جاري التثبيت',
+  auth: 'بانتظار المصادقة',
+  enable: 'جاري التفعيل',
+  verify: 'التحقق النهائي',
+};
 
 export const ENVS: Array<{ id: EnvId; label: string }> = [
   { id: 'claude', label: 'Claude' },

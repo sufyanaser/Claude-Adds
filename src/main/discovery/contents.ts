@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redactCommand, redactUrl } from './redact';
@@ -6,6 +7,8 @@ export interface SkillFile {
   name: string;
   description: string;
   path: string;
+  /** Short hash of the SKILL.md text. Two folders with the same hash hold the same skill. */
+  hash?: string;
 }
 
 export interface ServerDef {
@@ -68,8 +71,10 @@ export async function scanSkills(dir: string): Promise<SkillFile[]> {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const path = join(dir, entry.name, 'SKILL.md');
     try {
-      const meta = parseFrontmatter(await readFile(path, 'utf8'));
-      skills.push({ name: meta.name || entry.name, description: meta.description ?? '', path });
+      const text = await readFile(path, 'utf8');
+      const meta = parseFrontmatter(text);
+      const hash = createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex').slice(0, 16);
+      skills.push({ name: meta.name || entry.name, description: meta.description ?? '', path, hash });
     } catch {
       // No SKILL.md in this folder.
     }
@@ -80,7 +85,8 @@ export async function scanSkills(dir: string): Promise<SkillFile[]> {
 async function scanCommands(dir: string): Promise<SkillFile[]> {
   const commands: SkillFile[] = [];
   for (const entry of await listDir(dir)) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    // Files such as _conventions.md are notes for plugin authors, not commands.
+    if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('_')) continue;
     const path = join(dir, entry.name);
     try {
       const meta = parseFrontmatter(await readFile(path, 'utf8'));

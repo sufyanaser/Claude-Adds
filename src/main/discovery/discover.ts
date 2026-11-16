@@ -7,6 +7,7 @@ import type {
   CatalogInstall,
   CommandHint,
   EnvPlacement,
+  IssueCode,
   PlatformInfo,
   Snapshot,
   SourceHealth,
@@ -21,6 +22,7 @@ import { detectCli, runCli } from './cli';
 import { readPluginContents, readServerDefs, readServerFile, scanSkills, type PluginContents, type ServerDef, type SkillFile } from './contents';
 import { LastGood, staleNote } from './lastgood';
 import { parseMcpList, type McpEntry } from './mcp';
+import { mergeIdentical } from './merge';
 import { OFFICIAL_URL, discoverPlatforms } from './platforms';
 import { parsePluginList, pluginStatus, readInstalledFromFiles, type InstalledPlugin } from './plugins';
 
@@ -202,6 +204,8 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       ? [{ env: 'claude-code', scope: install.scope, status, evidence: pluginEvidence }]
       : [{ env: 'claude-code', scope: 'catalog', status, evidence: `${pluginEvidence} مع ${catalogEvidence}` }];
     if (install?.scope === 'account') envs.unshift({ env: 'claude', scope: 'account', status: 'installed', evidence: SYNC_EVIDENCE });
+    // The catalog serves Claude (Cowork) as well as Claude Code, so a catalog entry is listed for both.
+    if (!install && entry) envs.unshift({ env: 'claude', scope: 'catalog', status, evidence: `${catalogEvidence}، والكتالوج موجّه إلى Claude وClaude Code` });
 
     const tool: Tool = {
       id: `plugin:${name}`,
@@ -289,6 +293,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       docsUrl: record ? record.tool.docsUrl : DOCS.skills,
       location: skill.path,
       install: record?.tool.install,
+      fingerprint: record ? undefined : skill.hash,
     });
     skillCount++;
   };
@@ -390,6 +395,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       docsUrl: DOCS.mcp,
       location: input.endpoint || undefined,
       install: input.status === 'available' ? input.record?.tool.install : undefined,
+      fingerprint: !input.record && input.endpoint ? input.endpoint.toLowerCase() : undefined,
     });
     connectorCount++;
   };
@@ -476,12 +482,20 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
   for (const tool of tools.values()) {
     if (!tool.parentId) continue;
     tool.related.push(tool.parentId);
-    tools.get(tool.parentId)?.related.push(tool.id);
+    const parent = tools.get(tool.parentId);
+    if (!parent) continue;
+    parent.related.push(tool.id);
+    // A plugin is found by the names and descriptions of its commands.
+    if (tool.kind === 'command') parent.keywords = `${parent.keywords ?? ''} ${tool.name} ${tool.description}`.trim();
   }
+
+  // ---- One record per tool when copies in several platforms are provably identical.
+  const allTools = mergeIdentical([...tools.values()]);
 
   // ---- Account linked to the CLI on this computer.
   const account: AccountInfo = authRun?.ok ? parseAuthStatus(authRun.stdout) : { loggedIn: null };
 
+  const cliIssue: IssueCode = cli.available ? (authRun?.timedOut ? 'timeout' : 'command-failed') : 'cli-missing';
   const sources: SourceHealth[] = [
     {
       id: 'cli',
@@ -492,6 +506,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       evidence: 'claude --version',
       checkedAt: now,
       setupUrl: cli.available ? undefined : DOCS.setup,
+      issue: cli.available ? 'none' : 'cli-missing',
     },
     {
       id: 'account',
@@ -508,6 +523,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       evidence: 'claude auth status --json',
       checkedAt: now,
       setupUrl: account.loggedIn ? undefined : DOCS.setup,
+      issue: account.loggedIn ? 'none' : account.loggedIn === false ? 'auth' : cliIssue,
     },
     {
       id: 'plugins',
@@ -526,6 +542,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       checkedAt: now,
       dataDate: pluginReading.stale ? (pluginReading.at ?? undefined) : undefined,
       setupUrl: hasFullList && !pluginReading.stale ? undefined : DOCS.plugins,
+      issue: hasFullList && !pluginReading.stale ? 'none' : !cli.available ? 'cli-missing' : pluginRun?.timedOut ? 'timeout' : 'command-failed',
     },
     {
       id: 'skills',
@@ -551,6 +568,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       checkedAt: now,
       dataDate: mcpReading.stale ? (mcpReading.at ?? undefined) : undefined,
       setupUrl: mcpChecked && !mcpReading.stale ? undefined : DOCS.mcp,
+      issue: mcpChecked && !mcpReading.stale ? 'none' : !cli.available ? 'cli-missing' : mcpRun?.timedOut ? 'timeout' : 'command-failed',
     },
     {
       id: 'catalog',
@@ -567,6 +585,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
       checkedAt: now,
       dataDate: catalog.fromCache ? (catalog.fetchedAt ?? undefined) : undefined,
       setupUrl: catalog.fetchedAt === null || catalog.fromCache ? DOCS.catalog : undefined,
+      issue: catalog.fetchedAt === null || catalog.fromCache ? 'catalog' : 'none',
     },
     ...others.sources,
   ];
@@ -607,7 +626,7 @@ export async function discover(options: DiscoverOptions): Promise<Snapshot> {
     cliVersion: cli.version,
     projectDir,
     account,
-    tools: [...tools.values()],
+    tools: allTools,
     sources,
     platforms: [...claudePlatforms, ...others.platforms],
   };

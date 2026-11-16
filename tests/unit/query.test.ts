@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { mergeIdentical } from '../../src/main/discovery/merge';
+import { addToPath, candidateDirs, findOutsidePath, type PathProbe } from '../../src/main/discovery/paths';
 import { findAlternatives } from '../../src/shared/alternatives';
-import { EMPTY_FILTERS, applyFilters, matchesQuery, normalize, searchGroups, sortTools, statusIn, summarize } from '../../src/shared/query';
+import { EMPTY_FILTERS, applyFilters, matchesQuery, normalize, searchGroups, sortTools, statusCounts, statusIn, tabCounts } from '../../src/shared/query';
 import type { Tool } from '../../src/shared/types';
 
 function tool(partial: Partial<Tool> & Pick<Tool, 'id' | 'kind' | 'name' | 'status'>): Tool {
@@ -22,10 +24,10 @@ function tool(partial: Partial<Tool> & Pick<Tool, 'id' | 'kind' | 'name' | 'stat
 }
 
 const tools: Tool[] = [
-  tool({ id: 'plugin:sales', kind: 'plugin', name: 'sales', title: 'المبيعات', category: 'sales', status: 'enabled', description: 'Prospect and prep calls.' }),
-  tool({ id: 'plugin:figma', kind: 'plugin', name: 'figma', category: 'design', status: 'available', scope: 'catalog', mine: false, ar: { summary: 'إضافة Figma ضمن فئة التصميم.', when: '', example: '', generic: true } }),
+  tool({ id: 'plugin:sales', kind: 'plugin', name: 'sales', title: 'المبيعات', category: 'sales', status: 'enabled', description: 'Prospect and prep calls.', keywords: 'forecast Weekly sales forecast' }),
+  tool({ id: 'plugin:figma', kind: 'plugin', name: 'figma', category: 'design', status: 'available', scope: 'catalog', mine: false, envs: [{ env: 'claude', scope: 'catalog', status: 'available', evidence: 'catalog' }, { env: 'claude-code', scope: 'catalog', status: 'available', evidence: 'catalog' }] }),
   tool({ id: 'skill:sales:call-prep', kind: 'skill', name: 'call-prep', category: 'sales', status: 'enabled', parentId: 'plugin:sales' }),
-  tool({ id: 'command:sales:forecast', kind: 'command', name: 'forecast', category: 'sales', status: 'enabled', parentId: 'plugin:sales' }),
+  tool({ id: 'command:sales:forecast', kind: 'command', name: 'forecast', category: 'sales', status: 'enabled', parentId: 'plugin:sales', description: 'Weekly sales forecast' }),
   tool({
     id: 'connector:claude.ai Slack',
     kind: 'connector',
@@ -38,7 +40,7 @@ const tools: Tool[] = [
       { env: 'claude-code', scope: 'account', status: 'needs-auth', evidence: 'claude mcp list' },
     ],
   }),
-  tool({ id: 'skill:agents-skills:antislop', kind: 'skill', name: 'antislop', status: 'discovered', source: 'agents-skills', inCatalog: false, envs: [{ env: 'codex', scope: 'user', status: 'discovered', evidence: 'dir' }, { env: 'gemini', scope: 'user', status: 'enabled', evidence: 'gemini skills list' }] }),
+  tool({ id: 'skill:agents-skills:antislop', kind: 'skill', name: 'antislop', status: 'enabled', source: 'agents-skills', inCatalog: false, envs: [{ env: 'codex', scope: 'user', status: 'discovered', evidence: 'dir' }, { env: 'gemini', scope: 'user', status: 'enabled', evidence: 'gemini skills list' }] }),
 ];
 
 describe('normalize', () => {
@@ -49,53 +51,72 @@ describe('normalize', () => {
   });
 });
 
-describe('search', () => {
-  const all = { ...EMPTY_FILTERS };
+describe('tabs and search', () => {
+  const plugins = { ...EMPTY_FILTERS };
+  const skills = { ...EMPTY_FILTERS, kind: 'skill' as const };
+  const mcp = { ...EMPTY_FILTERS, kind: 'connector' as const };
 
-  it('finds my tools by English name, description and environment', () => {
-    expect(applyFilters(tools, { ...all, query: 'prospect' }).map((t) => t.id)).toEqual(['plugin:sales']);
-    expect(applyFilters(tools, { ...all, query: 'codex' }).map((t) => t.id)).toEqual(['skill:agents-skills:antislop']);
+  it('each tab lists only its own kind, and commands are never a row', () => {
+    expect(applyFilters(tools, plugins).map((t) => t.id)).toEqual(['plugin:sales']);
+    expect(applyFilters(tools, skills).map((t) => t.id)).toEqual(['skill:sales:call-prep', 'skill:agents-skills:antislop']);
+    expect(applyFilters(tools, mcp).map((t) => t.id)).toEqual(['connector:claude.ai Slack']);
   });
 
-  it('finds tools by Arabic title, kind and status', () => {
+  it('finds a plugin by one of its commands, by identifier and by function', () => {
+    expect(applyFilters(tools, { ...plugins, query: 'forecast' }).map((t) => t.id)).toEqual(['plugin:sales']);
+    expect(applyFilters(tools, { ...plugins, query: 'plugin:sales' }).map((t) => t.id)).toEqual(['plugin:sales']);
+    expect(applyFilters(tools, { ...plugins, query: 'prospect' }).map((t) => t.id)).toEqual(['plugin:sales']);
+  });
+
+  it('finds tools by Arabic title, tab name and status', () => {
     expect(matchesQuery(tools[0]!, 'المبيعات')).toBe(true);
-    expect(applyFilters(tools, { ...all, query: 'موصل' }).map((t) => t.id)).toEqual(['connector:claude.ai Slack']);
-    expect(applyFilters(tools, { ...all, query: 'يتطلب مصادقه' }).map((t) => t.id)).toEqual(['connector:claude.ai Slack']);
+    expect(applyFilters(tools, { ...mcp, query: 'mcp' }).map((t) => t.id)).toEqual(['connector:claude.ai Slack']);
+    expect(applyFilters(tools, { ...mcp, query: 'يتطلب مصادقه' }).map((t) => t.id)).toEqual(['connector:claude.ai Slack']);
   });
 
-  it('lists my tools first and catalog matches after them', () => {
-    const groups = searchGroups(tools, { ...all, query: 'إضافة' });
+  it('lists my tools first and catalog matches of the same tab after them', () => {
+    const groups = searchGroups(tools, { ...plugins, query: 'إضافة' });
     expect(groups.mine.map((t) => t.id)).toEqual(['plugin:sales']);
     expect(groups.catalog.map((t) => t.id)).toEqual(['plugin:figma']);
-  });
-
-  it('keeps the catalog out of the home screen when there is no query', () => {
-    expect(searchGroups(tools, all).catalog).toEqual([]);
-    expect(searchGroups(tools, { ...all, view: 'catalog' }).catalog.map((t) => t.id)).toEqual(['plugin:figma']);
+    expect(searchGroups(tools, plugins).catalog).toEqual([]);
   });
 });
 
-describe('environments, kinds and counts', () => {
-  it('filters by environment and reads the status of that environment', () => {
+describe('counts per tab and platform', () => {
+  it('counts each tab for the chosen platform, and separates the total from the filtered count', () => {
+    expect(tabCounts(tools, EMPTY_FILTERS)).toEqual([
+      { kind: 'plugin', total: 1, shown: 1 },
+      { kind: 'skill', total: 2, shown: 2 },
+      { kind: 'connector', total: 1, shown: 1 },
+    ]);
+    expect(tabCounts(tools, { ...EMPTY_FILTERS, env: 'codex' })).toEqual([
+      { kind: 'plugin', total: 0, shown: 0 },
+      { kind: 'skill', total: 1, shown: 1 },
+      { kind: 'connector', total: 0, shown: 0 },
+    ]);
+    const searched = tabCounts(tools, { ...EMPTY_FILTERS, kind: 'skill', query: 'antislop' });
+    expect(searched.find((t) => t.kind === 'skill')).toEqual({ kind: 'skill', total: 2, shown: 1 });
+    expect(searched.find((t) => t.kind === 'plugin')).toEqual({ kind: 'plugin', total: 1, shown: 0 });
+  });
+
+  it('a status filter narrows only the open tab', () => {
+    const counts = tabCounts(tools, { ...EMPTY_FILTERS, kind: 'skill', status: 'discovered', env: 'codex' });
+    expect(counts.find((t) => t.kind === 'skill')).toEqual({ kind: 'skill', total: 1, shown: 1 });
+    expect(tabCounts(tools, { ...EMPTY_FILTERS, kind: 'skill', status: 'disabled' }).find((t) => t.kind === 'skill')?.shown).toBe(0);
+    expect(tabCounts(tools, { ...EMPTY_FILTERS, kind: 'skill', status: 'disabled' }).find((t) => t.kind === 'plugin')?.shown).toBe(1);
+  });
+
+  it('the catalog covers Claude as well as Claude Code', () => {
+    expect(tabCounts(tools, { ...EMPTY_FILTERS, view: 'catalog', env: 'claude' })[0]).toEqual({ kind: 'plugin', total: 1, shown: 1 });
+    expect(tabCounts(tools, { ...EMPTY_FILTERS, view: 'catalog', env: 'gemini' })[0]).toEqual({ kind: 'plugin', total: 0, shown: 0 });
+  });
+
+  it('reads status per platform', () => {
     const slack = tools[4]!;
     expect(statusIn(slack, 'all')).toBe('needs-auth');
     expect(statusIn(slack, 'claude')).toBe('configured');
-    expect(applyFilters(tools, { ...EMPTY_FILTERS, env: 'claude' }).map((t) => t.id)).toEqual(['connector:claude.ai Slack']);
-    expect(applyFilters(tools, { ...EMPTY_FILTERS, env: 'gemini', status: 'enabled' }).map((t) => t.id)).toEqual(['skill:agents-skills:antislop']);
-    expect(applyFilters(tools, { ...EMPTY_FILTERS, env: 'chatgpt' })).toEqual([]);
-  });
-
-  it('counts commands apart from skills', () => {
-    const mine = tools.filter((t) => t.mine);
-    const summary = summarize(mine, 'all');
-    expect(summary.find((g) => g.kind === 'skill')?.total).toBe(2);
-    expect(summary.find((g) => g.kind === 'command')?.total).toBe(1);
-    expect(summary.find((g) => g.kind === 'plugin')?.statuses).toEqual([{ status: 'enabled', count: 1 }]);
-  });
-
-  it('counts by the status in the chosen environment', () => {
-    const summary = summarize(tools.filter((t) => t.mine && t.envs.some((p) => p.env === 'codex')), 'codex');
-    expect(summary.find((g) => g.kind === 'skill')?.statuses).toEqual([{ status: 'discovered', count: 1 }]);
+    expect(statusCounts(tools, { ...EMPTY_FILTERS, kind: 'skill', env: 'codex' })).toEqual([{ status: 'discovered', count: 1 }]);
+    expect(statusCounts(tools, { ...EMPTY_FILTERS, kind: 'skill', env: 'gemini' })).toEqual([{ status: 'enabled', count: 1 }]);
   });
 
   it('sorts by name in both directions without mutating the input', () => {
@@ -103,6 +124,58 @@ describe('environments, kinds and counts', () => {
     expect(asc).toEqual(['antislop', 'call-prep', 'figma', 'forecast', 'sales', 'Slack']);
     expect(sortTools(tools, { key: 'name', dir: 'desc' }).map((t) => t.name)).toEqual([...asc].reverse());
     expect(tools[0]?.name).toBe('sales');
+  });
+});
+
+describe('merging identical tools across platforms', () => {
+  const skill = (id: string, source: string, env: Tool['envs'][number]['env'], fingerprint: string, status: Tool['status'] = 'discovered') =>
+    tool({ id, kind: 'skill', name: 'antislop', status, source, inCatalog: false, fingerprint, location: `/${source}/antislop/SKILL.md`, envs: [{ env, scope: 'user', status, evidence: source }] });
+
+  it('folds copies with the same content into one record with every platform', () => {
+    const merged = mergeIdentical([skill('skill:user-skills:antislop', 'user-skills', 'claude-code', 'aaa'), skill('skill:agents-skills:antislop', 'agents-skills', 'codex', 'aaa'), skill('skill:gemini-skills:antislop', 'gemini-skills', 'gemini', 'aaa', 'enabled')]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe('skill:user-skills:antislop');
+    expect(merged[0]?.envs.map((p) => p.env)).toEqual(['claude-code', 'codex', 'gemini']);
+    expect(merged[0]?.status).toBe('enabled');
+    expect(merged[0]?.copies?.map((c) => c.source)).toEqual(['agents-skills', 'gemini-skills']);
+  });
+
+  it('keeps same-named tools apart when their content differs', () => {
+    const merged = mergeIdentical([skill('skill:user-skills:antislop', 'user-skills', 'claude-code', 'aaa'), skill('skill:agents-skills:antislop', 'agents-skills', 'codex', 'bbb')]);
+    expect(merged.map((t) => t.id)).toEqual(['skill:user-skills:antislop', 'skill:agents-skills:antislop']);
+  });
+
+  it('never merges catalog entries, plugin children or tools without a fingerprint', () => {
+    const child = { ...skill('skill:sales:x', 'synced', 'claude-code', 'aaa'), parentId: 'plugin:sales' };
+    const plain = { ...skill('skill:a:x', 'a', 'codex', 'aaa'), fingerprint: undefined };
+    expect(mergeIdentical([skill('skill:user-skills:antislop', 'user-skills', 'claude-code', 'aaa'), child, plain])).toHaveLength(3);
+  });
+});
+
+describe('finding a CLI outside PATH', () => {
+  const files = new Set(['/opt/homebrew/bin', '/opt/homebrew/bin/codex', '/Users/me/.nvm/versions/node/v22.1.0/bin', '/Users/me/.nvm/versions/node/v22.1.0/bin/gemini', '/usr/local/bin']);
+  const probe: PathProbe = {
+    exists: (path) => files.has(path.replace(/\\/g, '/')),
+    list: (path) => (path.replace(/\\/g, '/') === '/Users/me/.nvm/versions/node' ? ['v22.1.0'] : []),
+  };
+  const env = { PATH: '/usr/bin:/bin' };
+
+  it('looks in the usual install folders, including one per Node version', () => {
+    const dirs = candidateDirs('/Users/me', 'darwin', env, probe).map((d) => d.replace(/\\/g, '/'));
+    expect(dirs).toEqual(['/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.nvm/versions/node/v22.1.0/bin']);
+  });
+
+  it('reports the folder that holds the command, or null', () => {
+    expect(findOutsidePath('codex', '/Users/me', 'darwin', env, probe)?.replace(/\\/g, '/')).toBe('/opt/homebrew/bin');
+    expect(findOutsidePath('gemini', '/Users/me', 'darwin', env, probe)?.replace(/\\/g, '/')).toBe('/Users/me/.nvm/versions/node/v22.1.0/bin');
+    expect(findOutsidePath('agy', '/Users/me', 'darwin', env, probe)).toBeNull();
+  });
+
+  it('adds folders to this process only, once', () => {
+    const target: NodeJS.ProcessEnv = { PATH: ['one', 'two'].join(process.platform === 'win32' ? ';' : ':') };
+    expect(addToPath(['two', 'three'], target)).toEqual(['three']);
+    expect(target.PATH?.split(process.platform === 'win32' ? ';' : ':')).toEqual(['one', 'two', 'three']);
+    expect(addToPath(['three'], target)).toEqual([]);
   });
 });
 
@@ -127,7 +200,7 @@ describe('alternatives', () => {
     expect(findAlternatives(target, mine)).toEqual([]);
   });
 
-  it('suggests the same skill found in another source', () => {
+  it('suggests a same-named skill from another source when it was not merged', () => {
     const target = tool({ id: 'skill:agents-skills:antislop', kind: 'skill', name: 'antislop', status: 'discovered', source: 'agents-skills' });
     expect(findAlternatives(target, [...mine, target]).map((a) => a.tool.id)).toEqual(['skill:user-skills:antislop']);
   });

@@ -3,7 +3,9 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { ActionResult, BackupResult, PlanPick, Snapshot } from '../shared/types';
+import type { ActionResult, BackupResult, DiagnoseTarget, FixId, PlanPick, Snapshot } from '../shared/types';
+import { applyFix, authConnector, diagnose, verifyTool, type DiagnoseContext } from './diagnose';
+import { addToPath, candidateDirs } from './discovery/paths';
 import type { UpdateChannel } from '../shared/version';
 import { createBackup } from './backup';
 import { Updater } from './updater';
@@ -28,6 +30,11 @@ function inheritShellPath(): void {
   }
 }
 inheritShellPath();
+// The login shell can fail or be slow, so the usual install folders are added as well.
+// This changes PATH for this process only; shell profile files are never edited.
+if (process.platform !== 'win32' && !process.env.CLAUDE_ADDS_HOME) {
+  addToPath(candidateDirs(homedir(), process.platform, process.env), process.env);
+}
 
 // Tests run against a throwaway profile and home instead of the real ones.
 if (process.env.CLAUDE_ADDS_USER_DATA) app.setPath('userData', process.env.CLAUDE_ADDS_USER_DATA);
@@ -113,15 +120,45 @@ function loadSnapshot(): Promise<Snapshot> {
   return queued;
 }
 
-/** Opens a terminal with the CLI's own sign-in flow. Credentials stay inside the CLI. */
+/**
+ * Starts the CLI's own sign-in in the background, with no terminal window.
+ * The CLI opens the official page in the browser and keeps the credentials.
+ */
 async function openLogin(): Promise<ActionResult> {
   if (process.env.CLAUDE_ADDS_CLAUDE_BIN || process.env.CLAUDE_ADDS_HOME) return { ok: false, message: 'تسجيل الدخول معطّل في وضع الاختبار.' };
   const cli = await detectCli(home(), process.env);
   if (!cli.available) return { ok: false, message: cli.reason ?? 'Claude CLI غير متاح.' };
-  if (process.platform !== 'win32') return { ok: false, message: 'نفّذ claude auth login في الطرفية.' };
-  spawn('cmd.exe', ['/c', 'start', 'Claude login', 'cmd', '/k', 'claude auth login'], { detached: true, stdio: 'ignore' }).unref();
-  return { ok: true, message: 'فُتحت طرفية لتسجيل الدخول عبر Claude CLI. أكمل الدخول في المتصفح ثم حدّث البيانات.' };
+  const child = spawn('claude', ['auth', 'login'], { shell: true, windowsHide: true, stdio: 'ignore' });
+  const early = await new Promise<number | null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), 4000);
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 1);
+    });
+    child.once('error', () => {
+      clearTimeout(timer);
+      resolve(1);
+    });
+  });
+  if (early !== null && early !== 0) {
+    return { ok: false, message: 'تعذّر بدء تسجيل الدخول في الخلفية. نفّذ claude auth login في الطرفية مرة واحدة ثم حدّث البيانات.' };
+  }
+  child.once('exit', () => void loadSnapshot().then(() => notifyInventoryChanged()));
+  return { ok: true, message: 'بدأ تسجيل الدخول في الخلفية. أكمل الدخول في صفحة المتصفح، وتُحدَّث البيانات بعده تلقائيًا.' };
 }
+
+function notifyInventoryChanged(): void {
+  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('inventory:changed'));
+}
+
+const diagnoseContext = (): DiagnoseContext => ({
+  homeDir: home(),
+  env: process.env,
+  snapshot: () => lastSnapshot,
+  reload: () => loadSnapshot(),
+  login: async () => ({ ...(await openLogin()), evidence: ['claude auth login'] }),
+  openExternal: (url) => shell.openExternal(url),
+});
 
 function isPicks(value: unknown): value is PlanPick[] {
   return Array.isArray(value) && value.length <= 200 && value.every((pick) => typeof pick?.itemId === 'string' && typeof pick?.env === 'string');
@@ -150,6 +187,7 @@ function createWindow(): void {
 }
 
 ipcMain.handle('snapshot:load', () => loadSnapshot());
+ipcMain.handle('snapshot:last', () => lastSnapshot);
 ipcMain.handle('account:login', () => openLogin());
 
 // The renderer names a URL or a tool id. Commands are always built here.
@@ -159,8 +197,32 @@ ipcMain.handle('plan:git', (_event, url: unknown) =>
 ipcMain.handle('plan:tool', (_event, toolId: unknown) =>
   planFromTool(typeof toolId === 'string' ? lastSnapshot?.tools.find((tool) => tool.id === toolId) : undefined, planContext()),
 );
-ipcMain.handle('plan:run', (_event, planId: unknown, picks: unknown) =>
-  typeof planId === 'string' && isPicks(picks) ? runPlan(planId, picks, planContext()) : [],
+// Installs run here in the main process, in the background, and report each stage to the window.
+ipcMain.handle('plan:run', (event, planId: unknown, picks: unknown) =>
+  typeof planId === 'string' && isPicks(picks)
+    ? runPlan(planId, picks, planContext(), (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('job:progress', progress);
+      })
+    : [],
+);
+
+function isTarget(value: unknown): value is DiagnoseTarget {
+  const target = value as DiagnoseTarget | null;
+  return Boolean(target) && (target?.kind === 'source' || target?.kind === 'tool') && typeof target.id === 'string' && target.id.length < 300;
+}
+const FIXES: FixId[] = ['path', 'retry', 'login', 'enable', 'copy-skill'];
+
+ipcMain.handle('diagnose:run', (_event, target: unknown) =>
+  isTarget(target) ? diagnose(target, diagnoseContext()) : { title: '', issue: 'no-source', cause: 'هدف التشخيص غير صالح.', evidence: [] },
+);
+ipcMain.handle('diagnose:fix', (_event, target: unknown, fix: unknown) =>
+  isTarget(target) && FIXES.includes(fix as FixId) ? applyFix(target, fix as FixId, diagnoseContext()) : { ok: false, message: 'إجراء غير صالح.', evidence: [] },
+);
+ipcMain.handle('tool:verify', (_event, toolId: unknown) =>
+  typeof toolId === 'string' ? verifyTool(toolId, diagnoseContext()) : { ok: false, message: 'معرّف غير صالح.', evidence: [] },
+);
+ipcMain.handle('connector:auth', (_event, toolId: unknown) =>
+  typeof toolId === 'string' ? authConnector(toolId, diagnoseContext()) : { ok: false, message: 'معرّف غير صالح.', evidence: [] },
 );
 
 ipcMain.handle('clipboard:copy', (_event, text: unknown) => {

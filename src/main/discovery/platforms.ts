@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { EnvId, EnvPlacement, PlatformCapability, PlatformInfo, SourceHealth, Tool, ToolKind, ToolStatus } from '../../shared/types';
+import type { EnvId, EnvPlacement, IssueCode, PlatformCapability, PlatformInfo, SourceHealth, Tool, ToolKind, ToolStatus } from '../../shared/types';
 import { connectorNotes } from './arabic';
 import { onPath, runTool } from './cli';
 import { scanSkills } from './contents';
@@ -203,6 +203,7 @@ function makeTool(input: {
   version?: string;
   docsUrl: string;
   platformName: string;
+  fingerprint?: string;
 }): Tool {
   const ar =
     input.kind === 'connector'
@@ -237,17 +238,20 @@ function makeTool(input: {
     docsUrl: input.docsUrl,
     version: input.version,
     location: input.location,
+    fingerprint: input.fingerprint,
   };
 }
 
 interface Probe<T> {
   reading: Reading<T>;
   error: string;
+  issue: IssueCode;
 }
 
 async function probe<T>(ctx: PlatformContext, key: string, available: boolean, command: string, args: string[], parse: (text: string) => T): Promise<Probe<T>> {
   let fresh: T | null = null;
   let error = '';
+  let issue: IssueCode = 'none';
   if (available) {
     const run = await runTool(command, args, ctx.cwd, 60000);
     if (run.ok) {
@@ -255,14 +259,17 @@ async function probe<T>(ctx: PlatformContext, key: string, available: boolean, c
         fresh = parse(run.stdout);
       } catch {
         error = 'خرج الأمر بصيغة غير متوقعة';
+        issue = 'command-failed';
       }
     } else {
       error = run.error ?? 'فشل الأمر';
+      issue = run.timedOut ? 'timeout' : 'command-failed';
     }
   } else {
     error = `الأمر ${command} غير موجود في PATH`;
+    issue = 'cli-missing';
   }
-  return { reading: ctx.lastGood.use(key, fresh, ctx.now), error };
+  return { reading: ctx.lastGood.use(key, fresh, ctx.now), error, issue };
 }
 
 function capability(key: PlatformCapability['key'], label: string, state: PlatformCapability['state'], detail: string, evidence: string): PlatformCapability {
@@ -292,6 +299,7 @@ function sourceFor(env: EnvId, label: string, probes: Array<Probe<unknown>>, det
     checkedAt: now,
     dataDate: oldest,
     setupUrl: state === 'ok' ? undefined : OFFICIAL_URL[env],
+    issue: state === 'ok' ? 'none' : (probes.find((p) => p.issue !== 'none')?.issue ?? 'command-failed'),
   };
 }
 
@@ -338,6 +346,7 @@ export async function discoverPlatforms(ctx: PlatformContext): Promise<PlatformR
           checkedAt: p.reading.at ?? now,
           note: server.note,
           location: server.endpoint || undefined,
+          fingerprint: server.endpoint ? server.endpoint.toLowerCase() : undefined,
           docsUrl: OFFICIAL_URL[env],
           platformName,
         }),
@@ -398,6 +407,7 @@ export async function discoverPlatforms(ctx: PlatformContext): Promise<PlatformR
           checkedAt: now,
           description: skill.description,
           location: skill.path,
+          fingerprint: skill.hash,
           docsUrl: OFFICIAL_URL[first],
           platformName: dir.envs.length > 1 ? 'Codex وGemini CLI' : first === 'codex' ? 'Codex' : first === 'gemini' ? 'Gemini CLI' : 'Antigravity',
         }),

@@ -1161,6 +1161,459 @@ tr.group-empty td {
   background: var(--bg);
 }
 
+/* ---------- Tabs ---------- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 16px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tabs button:hover {
+  background: var(--sunken);
+}
+
+.tabs button[aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.tabs .count {
+  font-size: 12.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.summary {
+  gap: 4px 6px;
+}
+
+.filters {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) max-content;
+}
+
+.field-dd {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ---------- Dropdown ---------- */
+
+.dd-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: start;
+}
+
+.dd-button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.dd-button[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+
+.dd-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.dd-button[data-value]:not([data-value='all']) {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.dd-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dd-caret {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  /* Physical borders: the chevron points down in both text directions. */
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.dd-pop {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  /* Elevation: the list floats above the table it filters. */
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-family: var(--font);
+  font-size: 14px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.dd-pop[data-side='top'] {
+  transform: translateY(4px);
+}
+
+.dd-pop.open {
+  opacity: 1;
+  transform: none;
+}
+
+.dd-search {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.dd-list {
+  overflow-y: auto;
+  outline: none;
+}
+
+.dd-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dd-option.active {
+  background: var(--sunken);
+}
+
+.dd-option[aria-selected='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  font-weight: 600;
+}
+
+.dd-option[aria-selected='true'].active {
+  background: color-mix(in srgb, var(--accent) 26%, var(--surface));
+}
+
+.dd-option[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: default;
+}
+
+.dd-check {
+  color: var(--accent);
+  font-weight: 700;
+  text-align: center;
+}
+
+.dd-list:focus-visible .dd-option.active,
+.dd-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.dd-empty {
+  padding: 10px 8px;
+  color: var(--muted);
+}
+
+/* ---------- Details panel and pop-up ---------- */
+
+/*
+ * The tab always sits on the window's left edge, whether the panel is shown or
+ * hidden. Physical left/top are used on purpose: the tab's text is vertical,
+ * and logical inset properties would follow that vertical axis instead.
+ */
+.panel-toggle {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  z-index: 6;
+  padding: 12px 4px;
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--sunken);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12.5px;
+  writing-mode: vertical-rl;
+  transform: translateY(-50%);
+}
+
+/* Room for the tab so it never covers the panel's text. */
+.app.with-details .details {
+  padding-left: 40px;
+}
+
+.app.with-details .details-top {
+  margin-left: -40px;
+  padding-left: 40px;
+}
+
+.panel-toggle:hover {
+  background: var(--sunken);
+}
+
+.panel-toggle[hidden] {
+  display: none;
+}
+
+.details {
+  padding: 0 20px 24px;
+  overflow-x: hidden;
+}
+
+.details-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-inline: -20px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.summary-text {
+  font-size: 15px;
+}
+
+.action-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-modal {
+  width: min(640px, 94vw);
+  max-height: 88vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.tool-modal[open] {
+  display: flex;
+}
+
+.tool-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  padding: 0 20px 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.fold {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.fold summary {
+  min-height: 36px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 12px 12px;
+  font-size: 13px;
+}
+
+.evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-inline-start: 18px;
+  list-style: disc;
+  overflow-wrap: anywhere;
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.progress-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+/* The filled part shows finished stages; the moving stripe shows the stage in progress. */
+.progress-fill {
+  display: block;
+  width: max(var(--done, 0%), 18%);
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+.progress-fill.indeterminate {
+  width: 35%;
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes progress-slide {
+  0% {
+    margin-inline-start: -35%;
+  }
+  100% {
+    margin-inline-start: 100%;
+  }
+}
+
+.diag-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+#diag {
+  width: min(680px, 94vw);
+  max-height: 88vh;
+}
+
+#diag[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+#diag .dialog-body {
+  overflow-y: auto;
+  min-height: 0;
+  gap: 12px;
+}
+
+/* ---------- Version in the sidebar ---------- */
+
+.side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-version {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.app-version .btn {
+  width: 100%;
+  min-height: 32px;
+  padding: 2px 8px;
+  font-size: 12.5px;
+}
+
+.version-status {
+  overflow-wrap: anywhere;
+}
+
+.envbar .count {
+  white-space: nowrap;
+}
+
+/* The platform buttons wrap to a second line in a narrow work area instead of scrolling sideways. */
+.envbar {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+
+.panel-toggle:hover {
+  background: var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dd-pop {
+    transition: none;
+    transform: none;
+  }
+
+  .progress-fill,
+  .progress-fill.indeterminate {
+    animation: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .panel-toggle {
+    display: none;
+  }
+}
+
 /* ---------- Toast ---------- */
 
 .toast {
