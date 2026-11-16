@@ -1,6 +1,6 @@
 {
   "name": "claude-adds",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Arabic desktop viewer for Claude plugins, skills and connectors (read-only).",
   "author": "Sufyan Nasser",
@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "npm run build && node tests/e2e/smoke.mjs",
-    "package": "npm run build && electron-builder --win portable"
+    "package": "npm run build && electron-builder --win portable",
+    "package:mac": "npm run build && electron-builder --mac --publish never"
   },
   "build": {
     "appId": "com.sufyanaser.claudeadds",
@@ -31,6 +32,20 @@
     },
     "portable": {
       "artifactName": "Claude-Adds-${version}-portable.exe"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "artifactName": "Claude-Adds-${version}-mac-${arch}.${ext}"
     }
   },
   "devDependencies": {

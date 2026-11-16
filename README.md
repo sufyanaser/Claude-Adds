@@ -16,6 +16,24 @@ npm install
 npm start
 ```
 
+## الحزم الجاهزة
+
+من صفحة [الإصدارات](https://github.com/sufyanaser/Claude-Adds/releases):
+
+| النظام | الملف | ملاحظات |
+|---|---|---|
+| Windows 11 | `Claude-Adds-<version>-portable.exe` | محمول، يعمل دون تنصيب. غير موقّع، فقد يظهر تحذير SmartScreen. |
+| macOS (Apple Silicon) | `Claude-Adds-<version>-mac-arm64.dmg` | موقّع محليًا فقط وغير موثّق من Apple. عند أول فتح: انقر بالزر الأيمن على التطبيق ثم «فتح». |
+| macOS (Intel) | `Claude-Adds-<version>-mac-x64.dmg` | كالسابق. |
+
+تنصيب نسخة macOS من الطرفية بأمر واحد. يختار الحزمة المناسبة للمعالج، ينسخ التطبيق إلى `/Applications`، ويزيل علامة الحجر عن التنزيل:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sufyanaser/Claude-Adds/develop/scripts/install-mac.sh | bash
+```
+
+نسخة Windows مختبرة عمليًا على Windows 11. نسخة macOS تُبنى آليًا على خادم macOS ويُتحقق هناك من أنها تقلع فقط، ولم تُختبر واجهتها على جهاز Mac.
+
 ## الأوامر
 
 | الأمر | الوظيفة |
@@ -27,6 +45,7 @@ npm start
 | `npm run test:e2e` | اختبار عملي داخل نافذة التطبيق الحقيقية. لا تكتب على لوحة المفاتيح أثناء تشغيله، فالنافذة تظهر على سطح المكتب. |
 | `npm run icon` | إعادة توليد `build/icon.png` من `build/icon.svg` |
 | `npm run package` | حزمة Windows محمولة في `release/` |
+| `npm run package:mac` | حزمتا macOS في `release/`. يعمل على macOS فقط، ويشغّله GitHub Actions عند نشر إصدار. |
 
 ## الشاشات
 

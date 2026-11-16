@@ -20,8 +20,9 @@
   --danger-bg: #f7dfda;
 
   --radius: 6px;
-  --font: 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans Arabic', Tahoma, sans-serif;
-  --mono: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  /* System fonts on each platform: Segoe UI on Windows, San Francisco and SF Arabic on macOS. */
+  --font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'SF Arabic', 'Noto Sans Arabic', Tahoma, sans-serif;
+  --mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'Courier New', monospace;
   color-scheme: light;
 }
 

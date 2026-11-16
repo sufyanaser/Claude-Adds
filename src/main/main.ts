@@ -1,5 +1,5 @@
 import { BrowserWindow, app, clipboard, dialog, ipcMain, shell } from 'electron';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,24 @@ import type { ActionResult, PlanPick, Snapshot } from '../shared/types';
 import { detectCli } from './discovery/cli';
 import { discover } from './discovery/discover';
 import { clearPlans, planFromGit, planFromTool, runPlan, type PlanContext } from './install/plan';
+
+/**
+ * On macOS and Linux an app opened from the desktop does not inherit the
+ * terminal's PATH, so `claude`, `codex`, `gemini` and `agy` would look missing.
+ * The login shell is asked for its PATH once at startup.
+ */
+function inheritShellPath(): void {
+  if (process.platform === 'win32') return;
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const output = execFileSync(shell, ['-ilc', 'printf "%s" "$PATH"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const path = output.trim().split('\n').pop();
+    if (path) process.env.PATH = path;
+  } catch {
+    // Keep the inherited PATH. Missing tools are then reported as not found.
+  }
+}
+inheritShellPath();
 
 // Tests run against a throwaway profile and home instead of the real ones.
 if (process.env.CLAUDE_ADDS_USER_DATA) app.setPath('userData', process.env.CLAUDE_ADDS_USER_DATA);
