@@ -59,6 +59,12 @@ try {
   const first = await open(profile, home);
   const card = first.page.locator('[data-card="update"]');
   check('the installed build can update itself', (await card.getAttribute('data-update-mode')) === 'installer', `version ${first.version}`);
+  // CLAUDE_ADDS_UPDATE_TEST_CHANNEL=stable|dev tests a specific channel instead of the build's default.
+  const wanted = process.env.CLAUDE_ADDS_UPDATE_TEST_CHANNEL;
+  if (wanted && wanted !== (await first.page.locator('#update-channel').inputValue())) {
+    await first.page.selectOption('#update-channel', wanted);
+    await sleep(1500);
+  }
   console.log(`      channel: ${await first.page.locator('#update-channel').inputValue()}`);
 
   await first.page.locator('[data-update-check]').click();
