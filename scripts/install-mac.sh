@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installs the latest Claude Adds release into /Applications on macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/sufyanaser/Claude-Adds/develop/scripts/install-mac.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/sufyanaser/Claude-Adds/main/scripts/install-mac.sh | bash
 #
 # The app is ad-hoc signed, not notarized by Apple. This script clears the
 # download quarantine flag so it opens without the Gatekeeper prompt.

@@ -198,6 +198,31 @@ export interface PlanResult extends PlanPick {
 
 export type PlanResponse = { ok: true; plan: InstallPlan } | { ok: false; message: string };
 
+// ---------- App updates and backups ----------
+
+export interface UpdateState {
+  current: string;
+  /** 'stable' follows official releases; 'dev' also follows the build made for every push to develop. */
+  channel: 'stable' | 'dev';
+  auto: boolean;
+  /** 'installer': this build can replace itself. 'manual': it can only point at the new release. */
+  mode: 'installer' | 'manual';
+  status: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'ready' | 'error';
+  latest?: string;
+  url?: string;
+  message?: string;
+  checkedAt?: string;
+}
+
+export interface BackupResult {
+  ok: boolean;
+  message: string;
+  path?: string;
+  tools?: number;
+  skills?: number;
+  files?: number;
+}
+
 export interface ClaudeAddsApi {
   load(): Promise<Snapshot>;
   copy(text: string): Promise<boolean>;
@@ -210,4 +235,15 @@ export interface ClaudeAddsApi {
   planFromGit(url: string): Promise<PlanResponse>;
   planFromTool(toolId: string): Promise<PlanResponse>;
   runPlan(planId: string, picks: PlanPick[]): Promise<PlanResult[]>;
+  updateState(): Promise<UpdateState>;
+  updatePrefs(prefs: { channel?: 'stable' | 'dev'; auto?: boolean }): Promise<UpdateState>;
+  updateCheck(): Promise<UpdateState>;
+  /** Installs the downloaded update and restarts. False when nothing is ready. */
+  updateInstall(): Promise<boolean>;
+  onUpdate(listener: (state: UpdateState) => void): void;
+  backupDir(): Promise<string | null>;
+  chooseBackupDir(): Promise<string | null>;
+  runBackup(): Promise<BackupResult>;
+  /** Shows the last backup folder in the file manager. */
+  openBackup(): Promise<boolean>;
 }

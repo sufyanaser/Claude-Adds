@@ -21,7 +21,9 @@ import {
 import { EMPTY_FILTERS, searchGroups, sortTools, statusIn, summarize, type Filters, type Sort, type SortKey } from '../shared/query';
 import type {
   ActionResult,
+  BackupResult,
   ClaudeAddsApi,
+  UpdateState,
   EnvId,
   InstallPlan,
   PlanDestination,
@@ -68,6 +70,10 @@ interface State {
   /** Minutes between automatic refreshes. 0 turns it off. */
   syncMinutes: number;
   plan: PlanState;
+  update: UpdateState | null;
+  backupDir: string | null;
+  backup: BackupResult | null;
+  backingUp: boolean;
 }
 
 const SYNC_OPTIONS: Array<[number, string]> = [
@@ -111,6 +117,10 @@ const state: State = {
   result: null,
   syncMinutes: storedSync(),
   plan: emptyPlan(),
+  update: null,
+  backupDir: null,
+  backup: null,
+  backingUp: false,
 };
 
 // ---------- DOM helpers ----------
@@ -546,6 +556,27 @@ function renderBanner(): void {
       ),
     );
   }
+  const update = state.update;
+  if (update?.status === 'ready' && update.latest) {
+    notices.push(
+      h(
+        'div',
+        { class: 'notice', 'data-tone': 'ok', 'data-update-notice': 'ready', role: 'status' },
+        h('span', {}, mixed(`الإصدار ${update.latest} نُزّل وجاهز. يُثبَّت عند إغلاق التطبيق.`)),
+        button('إعادة التشغيل والتحديث الآن', { class: 'btn', 'data-update-install': true }, () => void api.updateInstall()),
+      ),
+    );
+  } else if (update?.status === 'available' && update.latest && update.mode === 'manual') {
+    const url = update.url;
+    notices.push(
+      h(
+        'div',
+        { class: 'notice', 'data-tone': 'ok', 'data-update-notice': 'available', role: 'status' },
+        h('span', {}, mixed(`يتوفر الإصدار ${update.latest}. هذه النسخة لا تحدّث نفسها.`)),
+        url ? button('فتح صفحة الإصدار', { class: 'btn' }, () => void api.open(url)) : null,
+      ),
+    );
+  }
   const unhealthy = (state.snapshot?.sources ?? []).filter((source) => source.state !== 'ok');
   if (unhealthy.length > 0) {
     const failed = unhealthy.some((source) => source.state === 'failed');
@@ -891,6 +922,95 @@ function renderDetails(): void {
   );
 }
 
+const UPDATE_STATUS: Record<UpdateState['status'], (update: UpdateState) => string> = {
+  idle: () => 'لم يُفحص بعد في هذه الجلسة.',
+  checking: () => 'جارٍ التحقق من الإصدارات.',
+  none: () => 'أنت على أحدث إصدار في هذه القناة.',
+  available: (update) =>
+    update.mode === 'manual'
+      ? `يتوفر الإصدار ${update.latest ?? ''}. هذه النسخة محمولة أو على macOS فلا تحدّث نفسها، فنزّل الإصدار من صفحته.`
+      : `يتوفر الإصدار ${update.latest ?? ''}. فعّل التحديث التلقائي أو تحقق مجددًا لتنزيله.`,
+  downloading: (update) => `جارٍ تنزيل مُثبِّت الإصدار ${update.latest ?? ''}.`,
+  ready: (update) => `الإصدار ${update.latest ?? ''} نُزّل وجاهز. يُثبَّت عند إغلاق التطبيق، أو الآن بزر إعادة التشغيل.`,
+  error: () => 'تعذّر التحقق من التحديثات.',
+};
+
+function updateCard(): HTMLElement | null {
+  const update = state.update;
+  if (!update) return null;
+  const channel = h(
+    'select',
+    { id: 'update-channel', 'aria-label': 'قناة التحديث' },
+    h('option', { value: 'stable' }, 'مستقرة: الإصدارات الرسمية فقط'),
+    h('option', { value: 'dev' }, 'تطويرية: مع كل تحديث على المستودع'),
+  );
+  channel.value = update.channel;
+  channel.addEventListener('change', () => void api.updatePrefs({ channel: channel.value === 'dev' ? 'dev' : 'stable' }));
+  const auto = h('input', { type: 'checkbox', id: 'update-auto' });
+  auto.checked = update.auto;
+  auto.addEventListener('change', () => void api.updatePrefs({ auto: auto.checked }));
+  const url = update.url;
+  const busy = update.status === 'checking' || update.status === 'downloading';
+  return h(
+    'div',
+    { class: 'platform', 'data-card': 'update', 'data-update-status': update.status, 'data-update-mode': update.mode },
+    h('div', { class: 'platform-head' }, h('h2', {}, 'تحديث التطبيق'), ltr(update.current, true)),
+    h('div', { class: 'settings-row' }, h('label', { for: 'update-channel' }, 'القناة'), channel),
+    h('label', { class: 'check' }, auto, 'تنزيل التحديث وتثبيته تلقائيًا'),
+    h('p', { 'data-update-text': true }, mixed(UPDATE_STATUS[update.status](update))),
+    update.message ? h('p', { class: 'muted' }, mixed(update.message)) : null,
+    update.checkedAt ? h('p', { class: 'muted' }, `آخر تحقق: ${formatTime(update.checkedAt)}`) : null,
+    h(
+      'div',
+      { class: 'actions' },
+      button(busy ? 'جارٍ التحقق' : 'التحقق الآن', { class: 'btn', 'data-update-check': true, disabled: busy }, () => void api.updateCheck()),
+      update.status === 'ready' ? button('إعادة التشغيل والتحديث الآن', { class: 'btn primary', 'data-update-install': true }, () => void api.updateInstall()) : null,
+      update.status === 'available' && url ? button('فتح صفحة الإصدار', { class: 'btn' }, () => void api.open(url)) : null,
+    ),
+  );
+}
+
+async function chooseBackupDir(): Promise<void> {
+  const chosen = await api.chooseBackupDir();
+  if (chosen) state.backupDir = chosen;
+  renderPlatforms();
+}
+
+async function runBackup(): Promise<void> {
+  state.backingUp = true;
+  state.backup = null;
+  renderPlatforms();
+  state.backup = await api.runBackup();
+  state.backingUp = false;
+  renderPlatforms();
+}
+
+function backupCard(): HTMLElement {
+  const result = state.backup;
+  return h(
+    'div',
+    { class: 'platform', 'data-card': 'backup' },
+    h('div', { class: 'platform-head' }, h('h2', {}, 'نسخة احتياطية')),
+    h('p', {}, mixed('تحفظ جرد أدواتك وأوامر إعادة تثبيتها ونسخًا من مجلدات مهاراتك في مجلد مؤرَّخ. لا تتضمن مفاتيح ولا رموزًا ولا بيانات اعتماد.')),
+    h('p', { 'data-backup-dir': true }, 'مسار التصدير: ', state.backupDir ? ltr(state.backupDir, true) : h('span', { class: 'muted' }, 'لم يُحدَّد بعد')),
+    result
+      ? h(
+          'p',
+          { class: result.ok ? 'ok-box' : 'warn', role: 'status', 'data-backup-result': result.ok ? 'ok' : 'failed' },
+          mixed(result.message),
+          result.path ? h('span', { class: 'sub' }, ltr(result.path)) : null,
+        )
+      : null,
+    h(
+      'div',
+      { class: 'actions' },
+      button('اختيار مسار التصدير', { class: 'btn', 'data-backup-choose': true }, () => void chooseBackupDir()),
+      button(state.backingUp ? 'جارٍ إنشاء النسخة' : 'إنشاء نسخة احتياطية الآن', { class: 'btn primary', 'data-backup-run': true, disabled: !state.backupDir || state.backingUp || !state.snapshot }, () => void runBackup()),
+      result?.ok ? button('فتح مجلد النسخة', { class: 'btn' }, () => void api.openBackup()) : null,
+    ),
+  );
+}
+
 function renderPlatforms(): void {
   el.platforms.hidden = state.view !== 'platforms';
   if (state.view !== 'platforms') return;
@@ -997,6 +1117,8 @@ function renderPlatforms(): void {
     h('h1', { class: 'overview-title' }, 'المنصات والمصادر'),
     h('p', { class: 'muted' }, 'ما ثبت لكل منصة على هذا الجهاز: الجرد، التثبيت، المزامنة، وتسجيل الدخول. تسجيل دخول المنصة ومصادقة كل موصل والتثبيت المحلي ثلاث خطوات منفصلة.'),
     h('div', { class: 'platform-grid' }, ...cards),
+    h('h2', { class: 'section-title' }, 'التطبيق'),
+    h('div', { class: 'platform-grid' }, updateCard(), backupCard()),
     h('h2', { class: 'section-title' }, 'مصادر البيانات وآخر تحقق'),
     h('ul', { class: 'sources' }, ...sources),
     h('div', { class: 'settings-row' }, h('label', { for: 'sync' }, 'المزامنة الدورية'), sync, h('span', { class: 'muted' }, 'تُحدَّث البيانات أيضًا عند كل تشغيل وبزر التحديث.')),
@@ -1086,5 +1208,18 @@ el.theme.addEventListener('click', () => applyTheme(document.documentElement.dat
 
 const saved = stored('theme');
 applyTheme(saved === 'dark' || saved === 'light' ? saved : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+api.onUpdate((update) => {
+  state.update = update;
+  renderBanner();
+  renderPlatforms();
+});
+void api.updateState().then((update) => {
+  state.update = update;
+  render();
+});
+void api.backupDir().then((dir) => {
+  state.backupDir = dir;
+});
 
 void load();

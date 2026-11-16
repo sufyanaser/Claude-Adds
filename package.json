@@ -1,6 +1,6 @@
 {
   "name": "claude-adds",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Arabic desktop viewer for Claude plugins, skills and connectors (read-only).",
   "author": "Sufyan Nasser",
@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "npm run build && node tests/e2e/smoke.mjs",
-    "package": "npm run build && electron-builder --win portable",
+    "package": "npm run build && electron-builder --win --publish never",
     "package:mac": "npm run build && electron-builder --mac --publish never"
   },
   "build": {
@@ -28,7 +28,10 @@
       "output": "release"
     },
     "win": {
-      "target": "portable"
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "portable": {
       "artifactName": "Claude-Adds-${version}-portable.exe"
@@ -46,6 +49,12 @@
       "category": "public.app-category.developer-tools",
       "identity": "-",
       "artifactName": "Claude-Adds-${version}-mac-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Claude-Adds-${version}-setup.exe"
     }
   },
   "devDependencies": {
@@ -59,5 +68,9 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.2",
     "vitest": "^5.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sufyanaser/Claude-Adds.git"
   }
 }

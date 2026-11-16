@@ -3,7 +3,10 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { ActionResult, PlanPick, Snapshot } from '../shared/types';
+import type { ActionResult, BackupResult, PlanPick, Snapshot } from '../shared/types';
+import type { UpdateChannel } from '../shared/version';
+import { createBackup } from './backup';
+import { Updater } from './updater';
 import { detectCli } from './discovery/cli';
 import { discover } from './discovery/discover';
 import { clearPlans, planFromGit, planFromTool, runPlan, type PlanContext } from './install/plan';
@@ -33,19 +36,45 @@ const home = () => process.env.CLAUDE_ADDS_HOME || homedir();
 const stateFile = () => join(app.getPath('userData'), 'state.json');
 const planContext = (): PlanContext => ({ homeDir: home(), userDataDir: app.getPath('userData'), env: process.env });
 
-async function readProjectDir(): Promise<string | null> {
+interface Settings {
+  projectDir?: string | null;
+  backupDir?: string | null;
+  updateChannel?: UpdateChannel;
+  autoUpdate?: boolean;
+}
+
+/** Small settings file: folder choices and update preferences. Never credentials. */
+async function readSettings(): Promise<Settings> {
   try {
-    const state = JSON.parse(await readFile(stateFile(), 'utf8')) as { projectDir?: unknown };
-    return typeof state.projectDir === 'string' ? state.projectDir : null;
+    const data: unknown = JSON.parse(await readFile(stateFile(), 'utf8'));
+    return data && typeof data === 'object' ? (data as Settings) : {};
   } catch {
-    return null;
+    return {};
   }
 }
 
-async function writeProjectDir(projectDir: string | null): Promise<void> {
+async function saveSettings(patch: Settings): Promise<void> {
+  const next = { ...(await readSettings()), ...patch };
   await mkdir(app.getPath('userData'), { recursive: true });
-  await writeFile(stateFile(), JSON.stringify({ projectDir }), 'utf8');
+  await writeFile(stateFile(), JSON.stringify(next), 'utf8');
 }
+
+async function readProjectDir(): Promise<string | null> {
+  const value = (await readSettings()).projectDir;
+  return typeof value === 'string' ? value : null;
+}
+
+const writeProjectDir = (projectDir: string | null) => saveSettings({ projectDir });
+
+/** Folder picker. Tests answer it through an environment variable instead of a dialog. */
+async function pickFolder(title: string): Promise<string | null> {
+  if (process.env.CLAUDE_ADDS_PICK_DIR) return process.env.CLAUDE_ADDS_PICK_DIR;
+  const result = await dialog.showOpenDialog({ title, properties: ['openDirectory', 'createDirectory'] });
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+}
+
+let updater: Updater | null = null;
+let lastBackupPath: string | null = null;
 
 let inFlight: Promise<Snapshot> | null = null;
 let queued: Promise<Snapshot> | null = null;
@@ -154,16 +183,64 @@ ipcMain.handle('external:open', async (_event, url: unknown) => {
 });
 
 ipcMain.handle('project:choose', async () => {
-  const result = await dialog.showOpenDialog({ title: 'اختيار مجلد المشروع', properties: ['openDirectory'] });
-  const chosen = result.canceled ? null : (result.filePaths[0] ?? null);
+  const chosen = await pickFolder('اختيار مجلد المشروع');
   if (chosen) await writeProjectDir(chosen);
   return chosen;
 });
 
 ipcMain.handle('project:clear', () => writeProjectDir(null));
 
+ipcMain.handle('update:state', () => updater?.get() ?? null);
+ipcMain.handle('update:check', () => updater?.check() ?? null);
+ipcMain.handle('update:install', () => updater?.install(true) ?? false);
+ipcMain.handle('update:prefs', (_event, prefs: unknown) => {
+  const input = (prefs ?? {}) as { channel?: unknown; auto?: unknown };
+  return updater?.setPrefs({
+    channel: input.channel === 'dev' || input.channel === 'stable' ? input.channel : undefined,
+    auto: typeof input.auto === 'boolean' ? input.auto : undefined,
+  });
+});
+
+ipcMain.handle('backup:dir', async () => (await readSettings()).backupDir ?? null);
+ipcMain.handle('backup:choose', async () => {
+  const chosen = await pickFolder('اختيار مسار تصدير النسخة الاحتياطية');
+  if (chosen) await saveSettings({ backupDir: chosen });
+  return chosen;
+});
+ipcMain.handle('backup:run', async (): Promise<BackupResult> => {
+  const destination = (await readSettings()).backupDir;
+  if (!destination) return { ok: false, message: 'اختر مسار التصدير أولًا.' };
+  // The backup uses the inventory already on screen, or takes one if none exists yet.
+  const snapshot = lastSnapshot ?? (await loadSnapshot());
+  const result = await createBackup(destination, snapshot, app.getVersion());
+  if (result.ok && result.path) lastBackupPath = result.path;
+  return result;
+});
+ipcMain.handle('backup:open', async () => {
+  if (!lastBackupPath) return false;
+  return (await shell.openPath(lastBackupPath)) === '';
+});
+
 void app.whenReady().then(async () => {
   await clearPlans(app.getPath('userData'));
+  const settings = await readSettings();
+  updater = new Updater({
+    currentVersion: app.getVersion(),
+    // The portable build unpacks to a temporary folder on every start, so it cannot replace itself.
+    canSelfInstall: process.platform === 'win32' && app.isPackaged && !process.env.PORTABLE_EXECUTABLE_FILE,
+    userDataDir: app.getPath('userData'),
+    env: process.env,
+    prefs: { channel: settings.updateChannel, auto: settings.autoUpdate },
+    savePrefs: (prefs) => saveSettings({ updateChannel: prefs.channel, autoUpdate: prefs.auto }),
+    onChange: (state) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('update:changed', state)),
+    quit: () => app.quit(),
+  });
+  // Check shortly after launch, then every three hours while the app stays open.
+  if (!process.env.CLAUDE_ADDS_NO_UPDATE_CHECK) {
+    setTimeout(() => void updater?.check(), 8000);
+    setInterval(() => void updater?.check(), 3 * 60 * 60 * 1000);
+  }
+  app.on('before-quit', () => updater?.installOnQuit());
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

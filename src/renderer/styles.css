@@ -1034,6 +1034,27 @@ tr.group-empty td {
   color: var(--text);
 }
 
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.ok-box {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
 /* ---------- Install plan ---------- */
 
 #plan {

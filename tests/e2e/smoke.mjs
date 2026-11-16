@@ -7,7 +7,8 @@
 //   [REAL-ISOLATED]  the real Claude CLI writing into a throwaway config folder
 //   [SIM]   a stand-in CLI and a throwaway home folder
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -32,7 +33,8 @@ function check(tag, name, pass, detail = '') {
 const openApps = [];
 
 async function launch(userData, extraEnv = {}) {
-  const env = { ...process.env, CLAUDE_ADDS_USER_DATA: userData, ...extraEnv };
+  // The scheduled update check is off in tests so they do not spend GitHub's request allowance.
+  const env = { ...process.env, CLAUDE_ADDS_USER_DATA: userData, CLAUDE_ADDS_NO_UPDATE_CHECK: '1', ...extraEnv };
   for (const [key, value] of Object.entries(env)) if (value === undefined) delete env[key];
   const app = await electron.launch({ executablePath: electronPath, args: appArgs, env });
   openApps.push(app);
@@ -179,7 +181,7 @@ async function main() {
     // Platforms and sources.
     const states = await sourceStates(page);
     check(T, 'every source was read successfully', Object.values(states).every((s) => s === 'ok') && Object.keys(states).length === 9, JSON.stringify(states));
-    const caps = await page.locator('.platform').evaluateAll((list) => Object.fromEntries(list.map((p) => [p.dataset.platform, Object.fromEntries([...p.querySelectorAll('[data-cap]')].map((c) => [c.dataset.cap, c.dataset.capState]))])));
+    const caps = await page.locator('.platform[data-platform]').evaluateAll((list) => Object.fromEntries(list.map((p) => [p.dataset.platform, Object.fromEntries([...p.querySelectorAll('[data-cap]')].map((c) => [c.dataset.cap, c.dataset.capState]))])));
     check(T, 'six platforms report their capabilities', Object.keys(caps).length === 6);
     check(T, 'Claude Code, Codex, Gemini and Antigravity inventories are verified', ['claude-code', 'codex', 'gemini', 'antigravity'].every((env) => caps[env]?.inventory === 'verified'), JSON.stringify(Object.fromEntries(Object.entries(caps).map(([k, v]) => [k, v.inventory]))));
     check(T, 'ChatGPT and the Claude account are marked as needing completion, not faked', caps.chatgpt?.inventory === 'unverified' && caps.chatgpt?.install === 'needs-completion' && caps.claude?.install === 'needs-completion');
@@ -263,8 +265,19 @@ async function main() {
     mkdirSync(join(home, '.gemini'), { recursive: true });
     writeFileSync(join(home, '.gemini', 'skills'), 'blocker');
     const fakeState = join(sandbox, 'fake-claude-state.json');
+    const backups = join(sandbox, 'backups');
+    mkdirSync(backups, { recursive: true });
+    // Stand-in for the GitHub release list: one official release and one newer development build.
+    const releaseList = JSON.stringify([
+      { tag_name: 'v99.0.0', prerelease: false, draft: false, html_url: 'https://github.com/sufyanaser/Claude-Adds/releases/tag/v99.0.0', assets: [] },
+      { tag_name: 'v99.1.0-dev.3', prerelease: true, draft: false, html_url: 'https://github.com/sufyanaser/Claude-Adds/releases/tag/v99.1.0-dev.3', assets: [] },
+    ]);
+    const server = createServer((_request, response) => response.end(releaseList));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
     const { app, page, errors } = await launch(join(sandbox, 'sim-profile'), {
+      CLAUDE_ADDS_PICK_DIR: backups,
+      CLAUDE_ADDS_UPDATE_API: `http://127.0.0.1:${server.address().port}/releases`,
       CLAUDE_ADDS_HOME: home,
       CLAUDE_CONFIG_DIR: join(home, '.claude'),
       CLAUDE_ADDS_ALLOW_LOCAL_GIT: '1',
@@ -319,6 +332,34 @@ async function main() {
     const placements = await page.locator('#details [data-placement]').evaluateAll((list) => list.map((p) => `${p.dataset.placement}=${p.dataset.placementStatus}`));
     check(T, 'a skill in the shared folder is shown for both Codex and Gemini as discovered', placements.join() === 'codex=discovered,gemini=discovered', placements.join());
     check(T, 'same-named copies in other folders are offered as alternatives, each with its own identity', (await page.locator('#details [data-alternative]').count()) >= 1);
+
+    // Backup to a chosen export path.
+    await page.fill('#search', '');
+    await page.locator('[data-nav="platforms"]').click();
+    check(T, 'backup cannot run before an export path is chosen', await page.locator('[data-backup-run]').isDisabled());
+    await page.locator('[data-backup-choose]').click();
+    await page.waitForFunction(() => !document.querySelector('[data-backup-run]')?.disabled);
+    check(T, 'the chosen export path is shown', (await page.locator('[data-backup-dir]').innerText()).includes('backups'));
+    await page.locator('[data-backup-run]').click();
+    await page.waitForSelector('[data-backup-result]', { timeout: 60000 });
+    const folders = readdirSync(backups);
+    const backupRoot = join(backups, folders[0] ?? '');
+    check(T, 'a dated backup folder is written to the export path', (await page.locator('[data-backup-result]').getAttribute('data-backup-result')) === 'ok' && folders.length === 1 && /^Claude-Adds-backup-\d{4}-\d{2}-\d{2}_/.test(folders[0]));
+    const manifest = existsSync(join(backupRoot, 'manifest.json')) ? readFileSync(join(backupRoot, 'manifest.json'), 'utf8') : '';
+    check(T, 'the backup holds the inventory and copies of owned skills', manifest.includes('skill:user-skills:demo-skill') && manifest.includes('plugin:demo-plugin') && existsSync(join(backupRoot, 'skills', 'user-skills', 'demo-skill', 'SKILL.md')) && existsSync(join(backupRoot, 'skills', 'agents-skills', 'demo-skill', 'reference.md')) && existsSync(join(backupRoot, 'README.txt')));
+    check(T, 'the backup contains no credential values', !manifest.includes('do-not-show-this'));
+    await page.screenshot({ path: join(shots, '14-backup.png') });
+
+    // Update check against the stand-in release list.
+    check(T, 'the app shows its version and starts on the stable channel', (await page.locator('#update-channel').inputValue()) === 'stable' && /\d+\.\d+\.\d+/.test(await page.locator('[data-card="update"] .platform-head').innerText()));
+    await page.locator('[data-update-check]').click();
+    await page.waitForSelector('[data-card="update"][data-update-status="available"]', { timeout: 30000 });
+    check(T, 'the stable channel offers the official release, not the development build', (await page.locator('[data-update-text]').innerText()).includes('99.0.0') && !(await page.locator('[data-update-text]').innerText()).includes('dev'));
+    await page.selectOption('#update-channel', 'dev');
+    await page.waitForFunction(() => document.querySelector('[data-update-text]')?.textContent?.includes('99.1.0-dev.3'), null, { timeout: 30000 });
+    check(T, 'the development channel follows the newest build', (await page.locator('#update-channel').inputValue()) === 'dev');
+    await page.screenshot({ path: join(shots, '15-update.png') });
+    server.close();
     check(T, 'no console errors', errors.length === 0, errors.join(' | '));
     await app.close();
   }
