@@ -70,7 +70,8 @@ try {
   await first.page.locator('[data-update-check]').click();
   await first.page.waitForSelector('[data-card="update"][data-update-status="ready"], [data-card="update"][data-update-status="none"], [data-card="update"][data-update-status="error"]', { timeout: 600000 });
   const status = await card.getAttribute('data-update-status');
-  const text = (await card.innerText()).replace(/\s+/g, ' ');
+  // textContent, not innerText: since 0.4.0 the verification note sits in a folded section.
+  const text = ((await card.textContent()) ?? '').replace(/\s+/g, ' ');
   check('a newer release was found, downloaded and verified', status === 'ready' && text.includes('SHA-256'), `${status}: ${text.slice(0, 160)}`);
   check('the ready update is announced in the banner', (await first.page.locator('[data-update-notice="ready"]').count()) === 1);
   if (status !== 'ready') throw new Error('update did not become ready');
