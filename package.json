@@ -2,7 +2,7 @@
   "name": "claude-adds",
   "version": "0.3.0",
   "private": true,
-  "description": "Arabic desktop viewer for Claude plugins, skills and connectors (read-only).",
+  "description": "Arabic desktop app for the tools you have across Claude, Claude Code, Codex, Gemini and Antigravity.",
   "author": "Sufyan Nasser",
   "license": "UNLICENSED",
   "main": "dist/main/main.js",
