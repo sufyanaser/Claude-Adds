@@ -930,7 +930,7 @@ function emptyBox(): HTMLElement {
   const { env, view, query, kind } = state.filters;
   const others = tabCounts(tools(), state.filters).filter((tab) => tab.kind !== kind && tab.shown > 0);
   const otherTabs = others.map((tab) => button(`${TAB_LABEL[tab.kind]} (${tab.shown})`, { class: 'btn', 'data-other-tab': tab.kind }, () => setTab(tab.kind)));
-  const allPlatforms = env !== 'all' ? button('عرض كل المنصات', { class: 'btn primary', 'data-show-all-platforms': true }, () => setEnv('all')) : null;
+  const allPlatforms = env !== 'all' ? button('عرض كل المنصات', { class: 'btn', 'data-show-all-platforms': true }, () => setEnv('all')) : null;
   const catalogSource = state.snapshot?.sources.find((source) => source.id === 'catalog');
   const platformSource = state.snapshot?.sources.find((source) => source.env === env && source.state !== 'ok');
   const diagnose = (id: string) => button('تشخيص وإصلاح', { class: 'btn primary', 'data-diagnose': id }, () => void openDiag([{ kind: 'source', id }]));
@@ -966,7 +966,7 @@ function emptyBox(): HTMLElement {
   }
   const filtered = state.filters.status !== 'all' || state.filters.category !== 'all' || state.filters.source !== 'all' || state.filters.scope !== 'all';
   if (filtered) {
-    return h('div', { class: 'state-box', 'data-state': 'filtered-out' }, 'المرشحات الحالية تخفي كل العناصر.', h('div', { class: 'actions' }, button('مسح المرشحات', { class: 'btn primary' }, clearFilters)));
+    return h('div', { class: 'state-box', 'data-state': 'filtered-out' }, 'المرشحات الحالية تخفي كل العناصر.', h('div', { class: 'actions' }, button('مسح المرشحات', { class: 'btn' }, clearFilters)));
   }
   if (env !== 'all') {
     return h(
@@ -1319,7 +1319,7 @@ function backupCard(): HTMLElement {
     h(
       'div',
       { class: 'actions' },
-      button(state.backingUp ? 'جارٍ إنشاء النسخة' : 'إنشاء نسخة احتياطية الآن', { class: 'btn primary', 'data-backup-run': true, disabled: !state.backupDir || state.backingUp || !state.snapshot }, () => void runBackup()),
+      button(state.backingUp ? 'جارٍ إنشاء النسخة' : 'إنشاء نسخة احتياطية الآن', { class: 'btn', 'data-backup-run': true, disabled: !state.backupDir || state.backingUp || !state.snapshot }, () => void runBackup()),
       button('اختيار مسار التصدير', { class: 'btn', 'data-backup-choose': true }, () => void chooseBackupDir()),
       result?.ok ? button('فتح مجلد النسخة', { class: 'btn' }, () => void api.openBackup()) : null,
     ),
@@ -1353,8 +1353,8 @@ function platformCard(snapshot: Snapshot, env: EnvId, label: string): HTMLElemen
       first
         ? button('تشخيص وإصلاح', { class: 'btn primary', 'data-diagnose': first.id }, () => void openDiag(broken.map((source) => ({ kind: 'source', id: source.id }))))
         : state_ === 'ok'
-          ? button('عرض أدواتها', { class: 'btn primary' }, () => setEnv(env))
-          : button('فتح المسار الرسمي', { class: 'btn primary', 'data-official': env }, () => void api.open(platform.officialUrl)),
+          ? button('عرض أدواتها', { class: 'btn' }, () => setEnv(env))
+          : button('فتح المسار الرسمي', { class: 'btn', 'data-official': env }, () => void api.open(platform.officialUrl)),
       env === 'claude-code' && login && login.state !== 'verified' && snapshot.cliVersion
         ? button('تسجيل الدخول', { class: 'btn', 'data-login': true }, async () => {
             state.result = await api.login();
@@ -1399,7 +1399,7 @@ function renderPlatforms(): void {
         'div',
         {},
         h('div', {}, mixed(source.message)),
-        source.state !== 'ok' ? h('div', { class: 'settings-row' }, button('تشخيص وإصلاح', { class: 'btn primary', 'data-diagnose': source.id }, () => void openDiag([{ kind: 'source', id: source.id }]))) : null,
+        source.state !== 'ok' ? h('div', { class: 'settings-row' }, button('تشخيص وإصلاح', { class: 'btn', 'data-diagnose': source.id }, () => void openDiag([{ kind: 'source', id: source.id }]))) : null,
         fold(
           'الدليل والوقت',
           'source-evidence',

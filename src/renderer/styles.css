@@ -194,10 +194,11 @@ select {
   background: var(--sunken);
 }
 
+/* The current page is marked by tone and weight. The filled accent is kept for the one main action on screen. */
 .nav button[aria-current='page'] {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
+  background: var(--sunken);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .nav .count {
@@ -1584,6 +1585,38 @@ tr.group-empty td {
 
 .envbar .count {
   white-space: nowrap;
+}
+
+/*
+ * Edges of controls need 3:1 against what is behind them, so a field or button
+ * can be told from the page without relying on its label. Dividers and card
+ * outlines keep the softer --border.
+ */
+:root {
+  --control-border: #7f857f;
+}
+
+:root[data-theme='dark'] {
+  --control-border: #6f7873;
+}
+
+.btn,
+.dd-button,
+.dd-search,
+.search input,
+.field input,
+.settings-row select,
+.panel-toggle {
+  border-color: var(--control-border);
+}
+
+.btn.primary {
+  border-color: var(--accent);
+}
+
+.dd-button[aria-expanded='true'],
+.dd-button[data-value]:not([data-value='all']) {
+  border-color: var(--accent);
 }
 
 /* The platform buttons wrap to a second line in a narrow work area instead of scrolling sideways. */

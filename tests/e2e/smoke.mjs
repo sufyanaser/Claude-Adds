@@ -155,6 +155,17 @@ async function main() {
     await page.locator('#details [data-copy-main]').click();
     check(T, 'copying the main command puts it on the clipboard', (await clip(app)).length > 0 && (await page.locator('#toast').innerText()).includes('تم نسخ'));
     check(T, 'the details panel has no horizontal scroll', await page.locator('#details').evaluate((d) => d.scrollWidth <= d.clientWidth + 1));
+    const filled = await page.locator('.btn.primary:visible').evaluateAll((list) => list.map((b) => b.textContent.trim()));
+    const navBackground = await page.locator('[data-nav="mine"]').evaluate((b) => getComputedStyle(b).backgroundColor);
+    const accent = await page.evaluate(() => { const probe = document.createElement('span'); probe.style.color = 'var(--accent)'; document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; });
+    check(T, 'one filled accent button on screen: the main action of the selected tool', filled.length === 1 && filled[0] === 'متابعة المصادقة' && navBackground !== accent, filled.join(' | '));
+    const edge = await page.evaluate(() => {
+      const parse = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const lum = (c) => { const [r, g, b] = parse(c).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      return ['#refresh', '[data-dd="status"]', '#search'].map((selector) => { const node = document.querySelector(selector); const own = getComputedStyle(node.closest('.top, .view')).backgroundColor; const parent = /rgba\(0, 0, 0, 0\)|transparent/.test(own) ? getComputedStyle(document.body).backgroundColor : own; return Number(ratio(getComputedStyle(node).borderTopColor, parent).toFixed(2)); });
+    });
+    check(T, 'control edges reach 3:1 against their background', edge.every((value) => value >= 3), edge.join(' '));
     const toggleBox = await page.locator('#panel-toggle').boundingBox();
     check(T, 'the show/hide tab sits on the left edge of the window, not over the content', toggleBox.x <= 1 && toggleBox.x + toggleBox.width <= 40, `x=${Math.round(toggleBox.x)} w=${Math.round(toggleBox.width)}`);
     check(T, 'the platform bar has no horizontal scroll', await page.locator('#envbar').evaluate((b) => b.scrollWidth <= b.clientWidth + 1));
