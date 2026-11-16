@@ -31,6 +31,40 @@ function run(file: string, args: string[], cwd: string, timeoutMs: number, shell
   });
 }
 
+/** True when a command with this name is on PATH. */
+export async function onPath(name: string, cwd: string): Promise<boolean> {
+  const finder = process.platform === 'win32' ? 'where.exe' : 'which';
+  const found = await run(finder, [name], cwd, 10000, false);
+  return found.ok && found.stdout.trim().length > 0;
+}
+
+/** Runs another platform's CLI (codex, gemini, agy) with fixed, read-only arguments. */
+export function runTool(name: string, args: string[], cwd: string, timeoutMs: number): Promise<CliRun> {
+  return run(name, args, cwd, timeoutMs, true);
+}
+
+/** Runs git without a shell. Used only to clone a repository the user named. */
+export function runGit(args: string[], cwd: string, timeoutMs: number): Promise<CliRun> {
+  return new Promise((resolve) => {
+    execFile(
+      'git',
+      args,
+      {
+        cwd,
+        timeout: timeoutMs,
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_LFS_SKIP_SMUDGE: '1' },
+      },
+      (error, stdout, stderr) => {
+        if (!error) return resolve({ ok: true, stdout, stderr });
+        resolve({ ok: false, stdout, stderr, error: `رمز الخروج ${String(error.code ?? '?')}` });
+      },
+    );
+  });
+}
+
 /**
  * Locates the Claude CLI. `CLAUDE_ADDS_CLAUDE_BIN` overrides the lookup, which
  * is also how the missing-CLI state is exercised in tests.

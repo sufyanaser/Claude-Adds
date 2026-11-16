@@ -88,8 +88,13 @@ export async function readInstalledFromFiles(claudeDir: string): Promise<Install
   return plugins;
 }
 
-export function pluginStatus(installed: InstalledPlugin | undefined, cliAvailable: boolean): ToolStatus {
-  if (!installed) return cliAvailable ? 'available' : 'unverified';
-  if (installed.enabled === null) return 'unverified';
+/**
+ * `hasFullList` is true when the installed list came from the CLI (now or from
+ * the last good run). Only then does absence prove the plugin is not installed.
+ */
+export function pluginStatus(installed: InstalledPlugin | undefined, hasFullList: boolean): ToolStatus {
+  if (!installed) return hasFullList ? 'available' : 'unverified';
+  // Listed in the install registry, but nothing says whether it is switched on.
+  if (installed.enabled === null) return 'installed';
   return installed.enabled ? 'enabled' : 'disabled';
 }

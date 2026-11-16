@@ -97,7 +97,8 @@ describe('plugins', () => {
     expect(pluginStatus(undefined, true)).toBe('available');
     // Without the CLI an absent plugin may still be synced from the account.
     expect(pluginStatus(undefined, false)).toBe('unverified');
-    expect(pluginStatus({ ...enabled!, enabled: null }, false)).toBe('unverified');
+    // In the install registry, but nothing says whether it is switched on.
+    expect(pluginStatus({ ...enabled!, enabled: null }, false)).toBe('installed');
   });
 });
 

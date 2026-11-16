@@ -33,7 +33,8 @@ export function parseMcpList(text: string): McpEntry[] {
   for (const line of text.split(/\r?\n/)) {
     const nameEnd = line.indexOf(': ');
     const statusStart = line.lastIndexOf(' - ');
-    if (nameEnd <= 0 || statusStart < nameEnd) continue;
+    // Log lines such as "[mcp-sdk] ..." are not servers.
+    if (nameEnd <= 0 || statusStart < nameEnd || line.startsWith('[')) continue;
 
     const rawName = line.slice(0, nameEnd).trim();
     const target = line.slice(nameEnd + 2, statusStart).trim();

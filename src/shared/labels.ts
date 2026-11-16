@@ -1,21 +1,40 @@
-import type { CommandKind, ToolKind, ToolScope, ToolStatus } from './types';
+import type { CapabilityState, CommandKind, DestinationState, EnvId, PlanItemKind, ToolKind, ToolScope, ToolStatus } from './types';
 
 export const KIND_LABEL: Record<ToolKind, string> = {
   plugin: 'إضافة',
   skill: 'مهارة',
+  command: 'أمر',
   connector: 'موصل',
 };
 
 export const KIND_PLURAL: Record<ToolKind, string> = {
   plugin: 'الإضافات',
   skill: 'المهارات',
+  command: 'الأوامر',
   connector: 'الموصلات',
 };
 
+export const KINDS: ToolKind[] = ['plugin', 'skill', 'command', 'connector'];
+
+export const ENVS: Array<{ id: EnvId; label: string }> = [
+  { id: 'claude', label: 'Claude' },
+  { id: 'claude-code', label: 'Claude Code' },
+  { id: 'chatgpt', label: 'ChatGPT' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'gemini', label: 'Gemini' },
+  { id: 'antigravity', label: 'Antigravity' },
+];
+
+export function envLabel(id: EnvId | 'catalog'): string {
+  return id === 'catalog' ? 'الكتالوج' : (ENVS.find((env) => env.id === id)?.label ?? id);
+}
+
 export const STATUS_LABEL: Record<ToolStatus, string> = {
   available: 'متاحة في الكتالوج',
-  enabled: 'مثبّتة ومفعّلة',
-  disabled: 'مثبّتة ومعطّلة',
+  discovered: 'مكتشفة',
+  installed: 'مثبّتة',
+  enabled: 'مفعّلة',
+  disabled: 'معطّلة',
   configured: 'مُعدّ',
   connected: 'متصل مؤكد',
   'needs-auth': 'يتطلب مصادقة',
@@ -23,10 +42,26 @@ export const STATUS_LABEL: Record<ToolStatus, string> = {
   unverified: 'تعذّر التحقق',
 };
 
+/** What each status proves, shown beside it in the details panel. */
+export const STATUS_MEANING: Record<ToolStatus, string> = {
+  available: 'موجودة في الكتالوج وغير مثبّتة هنا.',
+  discovered: 'وُجد ملفها أو مدخلها في الإعداد، ولا دليل على حالة تحميلها.',
+  installed: 'مسجّلة كمثبّتة، وحالة تفعيلها غير مؤكدة.',
+  enabled: 'المنصة نفسها تقرّر أنها مفعّلة.',
+  disabled: 'مثبّتة والمنصة تقرّر أنها معطّلة.',
+  configured: 'موجود في الإعداد ولم يُفحص اتصاله.',
+  connected: 'نجح فحص اتصال حي.',
+  'needs-auth': 'المنصة تطلب تسجيل دخول لهذا الموصل.',
+  'not-configured': 'عنصر نائب بلا عنوان خادم.',
+  unverified: 'لم يتوفر دليل كافٍ على حالتها.',
+};
+
 export type Tone = 'ok' | 'warn' | 'info' | 'neutral' | 'danger';
 
 export const STATUS_TONE: Record<ToolStatus, Tone> = {
   available: 'neutral',
+  discovered: 'info',
+  installed: 'info',
   enabled: 'ok',
   disabled: 'warn',
   configured: 'info',
@@ -36,13 +71,15 @@ export const STATUS_TONE: Record<ToolStatus, Tone> = {
   unverified: 'danger',
 };
 
-/** Display order of statuses, most actionable first. */
+/** Display order of statuses, strongest evidence first. */
 export const STATUS_ORDER: ToolStatus[] = [
-  'enabled',
   'connected',
+  'enabled',
+  'installed',
+  'discovered',
+  'configured',
   'needs-auth',
   'disabled',
-  'configured',
   'not-configured',
   'available',
   'unverified',
@@ -53,7 +90,7 @@ export const SCOPE_LABEL: Record<ToolScope, string> = {
   project: 'المشروع',
   local: 'محلي لمشروع واحد',
   managed: 'مُدار من المؤسسة',
-  account: 'حساب Claude',
+  account: 'الحساب',
   catalog: 'الكتالوج فقط',
   unknown: 'غير معلوم',
 };
@@ -95,9 +132,17 @@ const SOURCE_LABEL: Record<string, string> = {
   'knowledge-work-plugins': 'كتالوج Anthropic',
   synced: 'مزامنة حساب Claude',
   'claude.ai': 'موصلات claude.ai',
-  'user-skills': 'مهارات المستخدم',
+  'user-skills': 'مهارات Claude Code',
   'user-config': 'إعداد MCP المحلي',
   project: 'ملفات المشروع',
+  'agents-skills': 'مجلد المهارات المشترك',
+  'codex-skills': 'مجلد مهارات Codex القديم',
+  'gemini-skills': 'مهارات Gemini',
+  'antigravity-skills': 'مهارات Antigravity',
+  'antigravity-legacy-skills': 'مجلد مهارات Antigravity القديم',
+  codex: 'إعداد Codex',
+  gemini: 'إعداد Gemini',
+  antigravity: 'إعداد Antigravity',
 };
 
 export function sourceLabel(key: string): string {
@@ -108,5 +153,24 @@ export const COPY_LABEL: Record<CommandKind, string> = {
   usage: 'نسخ أمر الاستخدام',
   install: 'نسخ أمر التثبيت',
   auth: 'نسخ أمر المصادقة',
-  prereq: 'نسخ أمر إضافة الكتالوج',
+};
+
+export const CAPABILITY_LABEL: Record<CapabilityState, { label: string; tone: Tone }> = {
+  verified: { label: 'متحقق', tone: 'ok' },
+  'needs-completion': { label: 'يتطلب إكمالًا', tone: 'warn' },
+  unverified: { label: 'تعذّر التحقق', tone: 'danger' },
+};
+
+export const DESTINATION_LABEL: Record<DestinationState, { label: string; tone: Tone }> = {
+  ready: { label: 'متوافق وجاهز', tone: 'ok' },
+  exists: { label: 'موجود مسبقًا', tone: 'info' },
+  'needs-completion': { label: 'يتطلب إكمالًا', tone: 'warn' },
+  unsupported: { label: 'غير مدعوم', tone: 'neutral' },
+};
+
+export const PLAN_KIND_LABEL: Record<PlanItemKind, string> = {
+  plugin: 'إضافة',
+  skill: 'مهارة',
+  extension: 'امتداد Gemini',
+  connector: 'موصل MCP',
 };
